@@ -1,16 +1,13 @@
 import type { EventRule, SimulationInput } from "./types";
 
 export const DEFAULT_EVENT_RULE: EventRule = {
+  mode: "ACTUAL",
   startHour: 10,
   endHour: 16,
   smpThresholdWonPerKwh: 0,
-  includeThreshold: true,
 };
 
-export const DEFAULT_SIMULATION_INPUT: Omit<
-  SimulationInput,
-  "hourlyLoad" | "currentTariff"
-> = {
+export const DEFAULT_SIMULATION_INPUT: SimulationInput = {
   analysisYear: 2025,
   customerType: "RESIDENTIAL_TOU",
   customerCount: 1200,

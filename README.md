@@ -2,7 +2,7 @@
 
 제주지역 주택용 TOU 및 전기차 자가소비용 고객을 대상으로, 태양광 발전량이 많은 시간대의 요금 할인과 부하이전이 고객·한전·계통에 미치는 영향을 분석하기 위한 웹 시뮬레이터입니다.
 
-현재 버전은 화면과 저장소의 초기 골격입니다. 화면에 표시되는 일부 금액과 이전량은 UI 확인용 잠정값이며, 공식 계산 결과가 아닙니다.
+업로드된 엑셀 기준점을 재현하는 계산엔진이 연결되어 있으며, 입력조건과 부하이전 시나리오를 변경하면 고객·한전·계통 결과가 즉시 재계산됩니다.
 
 ## 현재 구현 범위
 
@@ -11,17 +11,18 @@
 - 전체부하·선택부하 이전 시나리오 선택
 - 시간대별 부하곡선 및 월별 발령현황 표시
 - 고객·한전·계통 관점의 결과 화면 구분
+- 2024·2025·2026 YTD 발령실적과 월별 현황
+- 엑셀 기준점 보간 계산엔진 및 자동 회귀검사
 - PC·모바일 반응형 화면
 - GitHub Pages 자동 배포
-- 향후 계산엔진을 위한 타입·기본값·입력자료 형식 정의
 
 ## 저장소 구조
 
 ```text
 app/                         화면과 스타일
-lib/simulator/               계산엔진 인터페이스와 기본값
+lib/simulator/               엑셀 보정 계산엔진·타입·기본값
 data/                        입력자료 형식 및 CSV 템플릿
-docs/CALCULATION_ENGINE.md   계산엔진 설계 초안
+docs/CALCULATION_ENGINE.md   계산방법·기준점·가정
 .github/workflows/           GitHub Pages 자동 배포
 next.config.ts               GitHub Pages 정적 배포 설정
 ```
@@ -35,11 +36,12 @@ npm ci
 npm run dev
 ```
 
-코드 형식과 타입을 확인할 때는 다음 명령을 사용합니다.
+계산 기준점, 코드 형식과 타입을 확인할 때는 다음 명령을 사용합니다.
 
 ```bash
 npm run lint
 npm run typecheck
+npm run test:engine
 ```
 
 GitHub Pages용 정적 파일을 로컬에서 만들 때는 다음 명령을 사용합니다.
@@ -62,7 +64,7 @@ GITHUB_PAGES=true npm run build:github-pages
 
 > 중요: `Deploy from a branch`를 선택하면 시뮬레이터가 아니라 이 README 문서가 웹페이지로 표시될 수 있습니다. 반드시 `GitHub Actions`를 선택합니다.
 
-## 계산엔진 연결 순서
+## 계산엔진 처리 순서
 
 1. 시간별 SMP와 발령조건으로 이벤트 마스크 생성
 2. 고객유형별 기준 부하에 참여율과 이전율 적용
@@ -70,7 +72,7 @@ GITHUB_PAGES=true npm run build:github-pages
 4. 전력판매수익과 SMP 기반 구입비 변화 산정
 5. 고객·한전·계통 편익을 동일 기준으로 집계
 
-세부 입력자료와 산식 구조는 [계산엔진 설계 초안](docs/CALCULATION_ENGINE.md)을 참고합니다.
+세부 기준점, 산식과 현재 가정은 [계산엔진 문서](docs/CALCULATION_ENGINE.md)를 참고합니다.
 
 ## 자료 관리 원칙
 

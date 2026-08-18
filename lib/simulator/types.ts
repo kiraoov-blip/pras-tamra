@@ -6,30 +6,13 @@ export type CustomerTypeCode =
   | "EV_FAST_HIGH_VOLTAGE";
 
 export type LoadShiftMode = "AGGREGATE" | "SELECTIVE";
-
-export interface HourlyPoint {
-  timestamp: string;
-  usageKwh: number;
-  smpWonPerKwh: number;
-  season?: string;
-  dayType?: "WEEKDAY" | "SATURDAY" | "HOLIDAY";
-}
+export type EventMode = "ACTUAL" | "RULE";
 
 export interface EventRule {
+  mode: EventMode;
   startHour: number;
   endHour: number;
   smpThresholdWonPerKwh: number;
-  includeThreshold: boolean;
-}
-
-export interface TariffRate {
-  tariffId: string;
-  season: string;
-  dayType: string;
-  timeBand: string;
-  startHour: number;
-  endHour: number;
-  energyRateWonPerKwh: number;
 }
 
 export interface SimulationInput {
@@ -42,8 +25,6 @@ export interface SimulationInput {
   shiftMode: LoadShiftMode;
   weekendDiscountPriority: boolean;
   eventRule: EventRule;
-  hourlyLoad: HourlyPoint[];
-  currentTariff: TariffRate[];
 }
 
 export interface CustomerResult {
@@ -64,15 +45,17 @@ export interface UtilityResult {
 export interface GridResult {
   shiftedEnergyMwh: number;
   eventWindowLoadIncreaseMwh: number;
-  curtailmentReductionMwh?: number;
+  curtailmentReductionMwh: number;
 }
 
 export interface SimulationResult {
   engineVersion: string;
-  calculatedAt: string;
   eventDays: number;
   eventHours: number;
   participatingCustomers: number;
+  monthlyEventDays: number[];
+  baseLoadProfile: number[];
+  shiftedLoadProfile: number[];
   customer: CustomerResult;
   utility: UtilityResult;
   grid: GridResult;
