@@ -5,7 +5,7 @@ import type {
   SimulationInput,
   SimulationResult,
 } from "./types";
-import { getSelectedApplianceShare, SELECTABLE_APPLIANCES } from "./appliances";
+import { SELECTABLE_APPLIANCES } from "./appliances";
 import {
   REFERENCE_DATA,
   type ReferenceDayType,
@@ -13,11 +13,12 @@ import {
   type ReferenceSeason,
 } from "./reference-data.generated";
 
-export const ENGINE_VERSION = "2.0.0-hourly-audited";
+export const ENGINE_VERSION = "2.2.0-season-day-filter";
 
 type BaseCustomerType = Exclude<CustomerTypeCode, "EV_TOTAL">;
 type Components = Array<{ type: BaseCustomerType; weight: number }>;
 type HourlyRoute = { base: number[]; shifted: number[]; movedKwh: number };
+type SelectedEvent = ReferenceEvent & { hours: number[] };
 type LoadProfileMap = Record<BaseCustomerType, Record<ReferenceSeason, readonly number[]>>;
 type ApplianceProfileMap = Record<string, Record<ApplianceCode, readonly number[]>>;
 type EventMap = Record<`${AnalysisYear}`, readonly ReferenceEvent[]>;
@@ -97,9 +98,14 @@ function existingEvWeekendDiscount(
     && hour <= 13;
 }
 
-function selectedEvents(input: SimulationInput): Array<ReferenceEvent & { hours: number[] }> {
+function selectedEvents(input: SimulationInput): SelectedEvent[] {
   const source = EVENTS[String(input.analysisYear) as `${AnalysisYear}`];
   return source.flatMap((event) => {
+    const matchesSeason = input.seasonFilter === "ALL" || event.season === input.seasonFilter;
+    const matchesDayType = input.dayTypeFilter === "ALL"
+      || (input.dayTypeFilter === "WEEKDAY" && event.dayType === "WEEKDAY")
+      || (input.dayTypeFilter === "WEEKEND" && event.dayType !== "WEEKDAY");
+    if (!matchesSeason || !matchesDayType) return [];
     const hours = input.eventRule.mode === "ACTUAL"
       ? [...event.actualHours]
       : event.smp.flatMap((smp, hour) => {
@@ -112,6 +118,33 @@ function selectedEvents(input: SimulationInput): Array<ReferenceEvent & { hours:
       });
     return hours.length > 0 ? [{ ...event, hours }] : [];
   });
+}
+
+function emptyApplianceRecord(): Record<ApplianceCode, number> {
+  return Object.fromEntries(SELECTABLE_APPLIANCES.map(({ code }) => [code, 0])) as Record<ApplianceCode, number>;
+}
+
+function applianceRealizationRate(input: SimulationInput, code: ApplianceCode): number {
+  const configured = input.applianceShiftRates?.[code] ?? input.shiftRate;
+  return Math.max(0, Math.min(1, configured));
+}
+
+function applianceMaximumShares(events: readonly SelectedEvent[]): Record<ApplianceCode, number> {
+  const maximumKwh = emptyApplianceRecord();
+  events.forEach((event) => {
+    const profileKey = `${event.season}_${event.dayType === "WEEKDAY" ? "WEEKDAY" : "WEEKEND"}`;
+    const eventSet = new Set(event.hours);
+    SELECTABLE_APPLIANCES.forEach(({ code }) => {
+      maximumKwh[code] += APPLIANCE_PROFILES[profileKey][code].reduce(
+        (sum, kwh, hour) => sum + (!eventSet.has(hour) ? kwh * APPLIANCE_TO_CUSTOMER_SCALE : 0),
+        0,
+      );
+    });
+  });
+  const total = Object.values(maximumKwh).reduce((sum, value) => sum + value, 0);
+  return Object.fromEntries(
+    SELECTABLE_APPLIANCES.map(({ code }) => [code, total > 0 ? maximumKwh[code] / total : 0]),
+  ) as Record<ApplianceCode, number>;
 }
 
 function componentsFor(customerType: CustomerTypeCode): Components {
@@ -158,7 +191,7 @@ function residentialApplianceScenario(
   season: ReferenceSeason,
   dayType: ReferenceDayType,
   eventHours: readonly number[],
-  shiftRate: number,
+  input: SimulationInput,
   selectedAppliances: ReadonlySet<ApplianceCode>,
 ): HourlyRoute {
   const base = copyProfile("RESIDENTIAL_TOU", season);
@@ -174,7 +207,8 @@ function residentialApplianceScenario(
       .map((kwh, hour) => ({ hour, kwh, rate: rates[hour] }))
       .filter(({ hour, kwh }) => !eventSet.has(hour) && kwh > 0)
       .sort((left, right) => right.rate - left.rate || right.hour - left.hour);
-    let remaining = sourceHours.reduce((sum, item) => sum + item.kwh, 0) * shiftRate;
+    let remaining = sourceHours.reduce((sum, item) => sum + item.kwh, 0)
+      * applianceRealizationRate(input, code);
     let applianceMoved = 0;
     sourceHours.forEach(({ hour, kwh }) => {
       const removed = Math.min(kwh, remaining);
@@ -238,7 +272,7 @@ function routeForEvent(
     return aggregateScenarioOne(type, event.season, event.hours, input.shiftRate);
   }
   if (input.shiftMode === "RES_SCENARIO_2" && type === "RESIDENTIAL_TOU") {
-    return residentialApplianceScenario(event.season, event.dayType, event.hours, input.shiftRate, selectedAppliances);
+    return residentialApplianceScenario(event.season, event.dayType, event.hours, input, selectedAppliances);
   }
   if (input.shiftMode === "EV_SCENARIO_2_1") return evFastScenario(type, event.season, event.hours, input.shiftRate);
   if (input.shiftMode === "EV_SCENARIO_2_2") return evSlowScenario(type, event.season, event.hours, input.shiftRate);
@@ -279,6 +313,9 @@ export function validateSimulationInput(input: SimulationInput): string[] {
   if (!Number.isFinite(input.participationRate) || input.participationRate < 0 || input.participationRate > 1) errors.push("참여율은 0과 1 사이여야 합니다.");
   if (!Number.isFinite(input.discountRate) || input.discountRate < 0 || input.discountRate > 1) errors.push("할인율은 0과 1 사이여야 합니다.");
   if (!Number.isFinite(input.shiftRate) || input.shiftRate < 0 || input.shiftRate > 1) errors.push("부하이전율은 0과 1 사이여야 합니다.");
+  if (input.applianceShiftRates && Object.values(input.applianceShiftRates).some(
+    (value) => value !== undefined && (!Number.isFinite(value) || value < 0 || value > 1),
+  )) errors.push("가전별 이전 설정률은 0과 1 사이여야 합니다.");
   if (!Number.isFinite(input.eventRule.smpThresholdWonPerKwh)) errors.push("SMP 임계값은 숫자여야 합니다.");
   if (input.eventRule.startHour > input.eventRule.endHour) errors.push("발령 시작시간은 종료시간보다 늦을 수 없습니다.");
   return errors;
@@ -290,8 +327,13 @@ export function runSimulation(input: SimulationInput): SimulationResult {
   const components = componentsFor(input.customerType);
   const selectedCodes = new Set(input.selectedAppliances);
   const selectedApplianceCount = SELECTABLE_APPLIANCES.filter(({ code }) => selectedCodes.has(code)).length;
+  const maximumShares = applianceMaximumShares(events);
+  const configuredShares = Object.fromEntries(SELECTABLE_APPLIANCES.map(({ code }) => [
+    code,
+    selectedCodes.has(code) ? maximumShares[code] * applianceRealizationRate(input, code) : 0,
+  ])) as Record<ApplianceCode, number>;
   const selectedApplianceShare = input.shiftMode === "RES_SCENARIO_2" && input.customerType === "RESIDENTIAL_TOU"
-    ? getSelectedApplianceShare(input.selectedAppliances, input.analysisYear)
+    ? Object.values(configuredShares).reduce((sum, value) => sum + value, 0)
     : 1;
   const participatingCustomers = Math.round(input.customerCount * input.participationRate);
   const monthlyEventDays = Array.from({ length: 12 }, () => 0);
@@ -329,8 +371,9 @@ export function runSimulation(input: SimulationInput): SimulationResult {
       chartShifted[hour] /= events.length;
     }
   } else {
+    const fallbackSeason = input.seasonFilter === "ALL" ? "SHOULDER" : input.seasonFilter;
     components.forEach(({ type, weight }) => {
-      const profile = copyProfile(type, "SHOULDER");
+      const profile = copyProfile(type, fallbackSeason);
       profile.forEach((value, hour) => {
         chartBase[hour] += value * weight;
         chartShifted[hour] += value * weight;
@@ -359,10 +402,16 @@ export function runSimulation(input: SimulationInput): SimulationResult {
   if (input.eventRule.mode === "RULE") {
     warnings.push("SMP 자동판정은 원자료의 시간대별 SMP가 입력 임계값 이하인 시간만 다시 선택합니다.");
   }
+  if (input.seasonFilter !== "ALL" || input.dayTypeFilter !== "ALL") {
+    warnings.push("계절·요일 선택은 해당 조건의 발령·부하이전 효과만 필터링하며, 현행 고객요금은 분석연도 전체 기준입니다.");
+  }
+  if (events.length === 0) {
+    warnings.push("선택한 연도·계절·요일·발령조건에 해당하는 발령실적이 없어 할인 및 부하이전 효과는 0으로 계산했습니다.");
+  }
   if (input.analysisYear === 2026) {
     warnings.push("2026년은 5월 15일까지의 YTD 발령자료와 5개월 기본요금을 적용했습니다.");
   }
-  warnings.push("출력제어 회피량은 부하이전량의 85%가 실제 출력제어를 대체한다는 가정값입니다.");
+  warnings.push("출력제어 회피 가능량은 발령시간 부하 증가량의 85%가 실제 출력제어를 대체한다는 가정값입니다.");
 
   return {
     engineVersion: ENGINE_VERSION,
@@ -372,6 +421,8 @@ export function runSimulation(input: SimulationInput): SimulationResult {
     selectedApplianceCount,
     selectableApplianceCount: SELECTABLE_APPLIANCES.length,
     selectedApplianceShare,
+    applianceMaximumShares: maximumShares,
+    applianceConfiguredShares: configuredShares,
     monthlyEventDays,
     baseLoadProfile: chartBase,
     shiftedLoadProfile: chartShifted,

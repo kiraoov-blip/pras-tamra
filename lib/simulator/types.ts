@@ -1,4 +1,6 @@
 export type AnalysisYear = 2024 | 2025 | 2026;
+export type AnalysisSeason = "ALL" | "SHOULDER" | "SUMMER" | "WINTER";
+export type AnalysisDayType = "ALL" | "WEEKDAY" | "WEEKEND";
 
 export type CustomerTypeCode =
   | "RESIDENTIAL_TOU"
@@ -36,6 +38,8 @@ export interface EventRule {
 
 export interface SimulationInput {
   analysisYear: AnalysisYear;
+  seasonFilter: AnalysisSeason;
+  dayTypeFilter: AnalysisDayType;
   customerType: CustomerTypeCode;
   customerCount: number;
   participationRate: number;
@@ -43,6 +47,8 @@ export interface SimulationInput {
   shiftRate: number;
   shiftMode: LoadShiftMode;
   selectedAppliances: ApplianceCode[];
+  /** Appliance-specific realization ratio (0-1) against each appliance's maximum movable load. */
+  applianceShiftRates?: Partial<Record<ApplianceCode, number>>;
   weekendDiscountPriority: boolean;
   eventRule: EventRule;
 }
@@ -76,6 +82,8 @@ export interface SimulationResult {
   selectedApplianceCount: number;
   selectableApplianceCount: number;
   selectedApplianceShare: number;
+  applianceMaximumShares: Record<ApplianceCode, number>;
+  applianceConfiguredShares: Record<ApplianceCode, number>;
   monthlyEventDays: number[];
   baseLoadProfile: number[];
   shiftedLoadProfile: number[];

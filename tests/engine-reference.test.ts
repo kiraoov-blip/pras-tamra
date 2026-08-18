@@ -31,6 +31,24 @@ test("2025 실적 발령구간과 SMP 자동판정 시간을 서로 구분한다
   assert.equal(sum(actual.monthlyEventDays), 56);
 });
 
+test("계절·요일 전체 선택은 연간 결과를 유지하고 세부 선택은 해당 발령일만 필터링한다", () => {
+  const all = simulate({ seasonFilter: "ALL", dayTypeFilter: "ALL" });
+  const shoulder = simulate({ seasonFilter: "SHOULDER", dayTypeFilter: "ALL" });
+  const winter = simulate({ seasonFilter: "WINTER", dayTypeFilter: "ALL" });
+  const summer = simulate({ seasonFilter: "SUMMER", dayTypeFilter: "ALL" });
+  const weekday = simulate({ seasonFilter: "ALL", dayTypeFilter: "WEEKDAY" });
+  const weekend = simulate({ seasonFilter: "ALL", dayTypeFilter: "WEEKEND" });
+
+  assert.equal(all.eventDays, 56);
+  assert.equal(shoulder.eventDays + winter.eventDays + summer.eventDays, all.eventDays);
+  assert.equal(shoulder.eventHours + winter.eventHours + summer.eventHours, all.eventHours);
+  assert.equal(weekday.eventDays + weekend.eventDays, all.eventDays);
+  assert.equal(weekday.eventHours + weekend.eventHours, all.eventHours);
+  assert.equal(summer.eventDays, 0);
+  assert.equal(summer.customer.annualBenefitPerCustomerWon, 0);
+  assert.notDeepEqual(shoulder.baseLoadProfile, winter.baseLoadProfile);
+});
+
 test("할인만 적용한 기준점과 수정된 기본요금 포함 청구액을 재현한다", () => {
   const scenarioOne = simulate({ shiftMode: "SCENARIO_1", shiftRate: 0 });
   const scenarioTwo = simulate({ shiftMode: "RES_SCENARIO_2", shiftRate: 0 });
@@ -67,6 +85,27 @@ test("주택용 13개 가전 선택은 실제 이동경로를 바꾸며 선택�
   assert.ok(withoutHeatPump.grid.shiftedEnergyMwh < allSelected.grid.shiftedEnergyMwh);
   nearly(sum(allSelected.baseLoadProfile), sum(allSelected.shiftedLoadProfile), 1e-9);
   assert.ok(allSelected.shiftedLoadProfile.every((value) => value >= -1e-12));
+});
+
+test("가전별 이전비중은 최대치에서 0까지 독립적으로 조절되고 즉시 결과에 반영된다", () => {
+  const fullRates = Object.fromEntries(ALL_APPLIANCE_CODES.map((code) => [code, 1]));
+  const zeroRates = Object.fromEntries(ALL_APPLIANCE_CODES.map((code) => [code, 0]));
+  const maximum = simulate({
+    shiftMode: "RES_SCENARIO_2",
+    selectedAppliances: [...ALL_APPLIANCE_CODES],
+    applianceShiftRates: fullRates,
+  });
+  const none = simulate({
+    shiftMode: "RES_SCENARIO_2",
+    selectedAppliances: [...ALL_APPLIANCE_CODES],
+    applianceShiftRates: zeroRates,
+  });
+  nearly(Object.values(maximum.applianceMaximumShares).reduce((sum, value) => sum + value, 0), 1, 1e-9);
+  nearly(maximum.selectedApplianceShare, 1, 1e-9);
+  assert.equal(none.grid.shiftedEnergyMwh, 0);
+  assert.ok(maximum.grid.shiftedEnergyMwh > none.grid.shiftedEnergyMwh);
+  assert.equal(maximum.applianceMaximumShares.LIVING_ROOM_AC, 0);
+  assert.ok(maximum.applianceMaximumShares.ROBOT_VACUUM > 0);
 });
 
 test("EV 2-1은 급속, 2-2는 완속 충전경로에만 부하이전을 적용한다", () => {

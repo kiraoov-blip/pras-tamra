@@ -10,6 +10,8 @@ export const DEFAULT_EVENT_RULE: EventRule = {
 
 export const DEFAULT_SIMULATION_INPUT: SimulationInput = {
   analysisYear: 2025,
+  seasonFilter: "ALL",
+  dayTypeFilter: "ALL",
   customerType: "RESIDENTIAL_TOU",
   customerCount: 1200,
   participationRate: 0.8,

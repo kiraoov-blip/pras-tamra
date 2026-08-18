@@ -3,8 +3,8 @@
 import { useMemo, useState } from "react";
 import { REFERENCE_MONTHLY_USAGE_KWH } from "@/lib/simulator/defaults";
 import { runSimulation } from "@/lib/simulator/engine";
-import { ALL_APPLIANCE_CODES, getApplianceShare, SELECTABLE_APPLIANCES } from "@/lib/simulator/appliances";
-import type { AnalysisYear, ApplianceCode, CustomerTypeCode, EventMode, LoadShiftMode } from "@/lib/simulator/types";
+import { ALL_APPLIANCE_CODES, SELECTABLE_APPLIANCES } from "@/lib/simulator/appliances";
+import type { AnalysisDayType, AnalysisSeason, AnalysisYear, ApplianceCode, CustomerTypeCode, EventMode, LoadShiftMode } from "@/lib/simulator/types";
 
 type CustomerType = "주택용 TOU" | "전기차 전체" | "전기차 완속 저압" | "전기차 급속·고압";
 type ResultTab = "고객" | "한전" | "계통";
@@ -16,6 +16,21 @@ const CUSTOMER_CODES: Record<CustomerType, CustomerTypeCode> = {
   "전기차 완속 저압": "EV_SLOW_LOW_VOLTAGE",
   "전기차 급속·고압": "EV_FAST_HIGH_VOLTAGE",
 };
+const SEASON_LABELS: Record<AnalysisSeason, string> = {
+  ALL: "전체 계절",
+  SHOULDER: "봄·가을",
+  SUMMER: "여름",
+  WINTER: "겨울",
+};
+const DAY_TYPE_LABELS: Record<AnalysisDayType, string> = {
+  ALL: "전체 요일",
+  WEEKDAY: "주중",
+  WEEKEND: "주말",
+};
+const FULL_APPLIANCE_RATES = Object.fromEntries(
+  ALL_APPLIANCE_CODES.map((code) => [code, 1]),
+) as Record<ApplianceCode, number>;
+const LINE_CHART = { width: 760, height: 280, left: 42, right: 18, top: 20, bottom: 34 } as const;
 
 function formatInteger(value: number) {
   return new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 0 }).format(value);
@@ -26,7 +41,7 @@ function formatOneDecimal(value: number) {
 }
 
 function formatWon(value: number) {
-  return `${value > 0 ? "+" : ""}${formatOneDecimal(value)}원`;
+  return `${value > 0 ? "+" : ""}${formatInteger(value)}원`;
 }
 
 function formatMwh(value: number) {
@@ -34,7 +49,7 @@ function formatMwh(value: number) {
 }
 
 function formatMillionWon(value: number) {
-  return formatOneDecimal(value / 1_000_000);
+  return formatInteger(value / 1_000_000);
 }
 
 function clampPercent(value: number) {
@@ -51,6 +66,8 @@ function StatusDot({ tone = "blue" }: { tone?: "blue" | "green" | "amber" }) {
 
 export default function Home() {
   const [analysisYear, setAnalysisYear] = useState<AnalysisYear>(2025);
+  const [seasonFilter, setSeasonFilter] = useState<AnalysisSeason>("ALL");
+  const [dayTypeFilter, setDayTypeFilter] = useState<AnalysisDayType>("ALL");
   const [customerType, setCustomerType] = useState<CustomerType>("주택용 TOU");
   const [customerCount, setCustomerCount] = useState(1200);
   const [participation, setParticipation] = useState(80);
@@ -58,6 +75,7 @@ export default function Home() {
   const [shiftRate, setShiftRate] = useState(50);
   const [scenario, setScenario] = useState<LoadShiftMode>("SCENARIO_1");
   const [selectedAppliances, setSelectedAppliances] = useState<ApplianceCode[]>([...ALL_APPLIANCE_CODES]);
+  const [applianceShiftRates, setApplianceShiftRates] = useState<Record<ApplianceCode, number>>({ ...FULL_APPLIANCE_RATES });
   const [weekendPriority, setWeekendPriority] = useState(true);
   const [eventMode, setEventMode] = useState<EventMode>("ACTUAL");
   const [smpThreshold, setSmpThreshold] = useState(0);
@@ -65,11 +83,14 @@ export default function Home() {
   const [endHour, setEndHour] = useState(16);
   const [resultTab, setResultTab] = useState<ResultTab>("고객");
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [hoveredHour, setHoveredHour] = useState<number | null>(null);
 
   const customerCode = CUSTOMER_CODES[customerType];
   const monthlyUsage = REFERENCE_MONTHLY_USAGE_KWH[customerCode];
   const result = useMemo(() => runSimulation({
     analysisYear,
+    seasonFilter,
+    dayTypeFilter,
     customerType: customerCode,
     customerCount,
     participationRate: participation / 100,
@@ -77,6 +98,7 @@ export default function Home() {
     shiftRate: shiftRate / 100,
     shiftMode: scenario,
     selectedAppliances,
+    applianceShiftRates,
     weekendDiscountPriority: weekendPriority,
     eventRule: {
       mode: eventMode,
@@ -84,11 +106,17 @@ export default function Home() {
       endHour,
       smpThresholdWonPerKwh: smpThreshold,
     },
-  }), [analysisYear, customerCode, customerCount, participation, discount, shiftRate, scenario, selectedAppliances, weekendPriority, eventMode, startHour, endHour, smpThreshold]);
+  }), [analysisYear, seasonFilter, dayTypeFilter, customerCode, customerCount, participation, discount, shiftRate, scenario, selectedAppliances, applianceShiftRates, weekendPriority, eventMode, startHour, endHour, smpThreshold]);
 
   const maxProfile = Math.max(...result.baseLoadProfile, ...result.shiftedLoadProfile) * 1.08;
   const averageEventHours = result.eventDays ? result.eventHours / result.eventDays : 0;
   const yearLabel = analysisYear === 2026 ? "2026 YTD" : `${analysisYear}년`;
+  const scopeLabel = `${yearLabel} · ${SEASON_LABELS[seasonFilter]} · ${DAY_TYPE_LABELS[dayTypeFilter]}`;
+  const chartPlotWidth = LINE_CHART.width - LINE_CHART.left - LINE_CHART.right;
+  const chartPlotHeight = LINE_CHART.height - LINE_CHART.top - LINE_CHART.bottom;
+  const chartX = (index: number) => LINE_CHART.left + (index / 23) * chartPlotWidth;
+  const chartY = (value: number) => LINE_CHART.top + chartPlotHeight - (value / maxProfile) * chartPlotHeight;
+  const linePoints = (values: readonly number[]) => values.map((value, index) => `${chartX(index)},${chartY(value)}`).join(" ");
 
   const resultCopy: Record<ResultTab, {
     eyebrow: string;
@@ -101,7 +129,7 @@ export default function Home() {
       items: [
         ["고객당 기준기간 편익", formatWon(result.customer.annualBenefitPerCustomerWon)],
         ["참여고객 전체 편익", formatWon(result.customer.totalAnnualBenefitWon)],
-        ["제도 적용 후 고객요금", `${formatOneDecimal(result.customer.newAnnualBillWon)}원`],
+        ["제도 적용 후 고객요금", `${formatInteger(result.customer.newAnnualBillWon)}원`],
       ],
     },
     한전: {
@@ -119,16 +147,18 @@ export default function Home() {
       items: [
         ["기준기간 이전 전력량", formatMwh(result.grid.shiftedEnergyMwh)],
         ["발령시간 증가부하", formatMwh(result.grid.eventWindowLoadIncreaseMwh)],
-        ["출력제어 흡수 가능량", formatMwh(result.grid.curtailmentReductionMwh)],
+        ["출력제어 회피 가능량", formatMwh(result.grid.curtailmentReductionMwh)],
       ],
     },
   };
   const activeResult = resultCopy[resultTab];
 
   const reset = () => {
-    setAnalysisYear(2025); setCustomerType("주택용 TOU"); setCustomerCount(1200);
+    setAnalysisYear(2025); setSeasonFilter("ALL"); setDayTypeFilter("ALL");
+    setCustomerType("주택용 TOU"); setCustomerCount(1200);
     setParticipation(80); setDiscount(50); setShiftRate(50); setScenario("SCENARIO_1");
     setSelectedAppliances([...ALL_APPLIANCE_CODES]);
+    setApplianceShiftRates({ ...FULL_APPLIANCE_RATES });
     setWeekendPriority(true); setEventMode("ACTUAL"); setSmpThreshold(0);
     setStartHour(10); setEndHour(16);
   };
@@ -142,6 +172,11 @@ export default function Home() {
     setSelectedAppliances((current) => current.includes(code)
       ? current.filter((item) => item !== code)
       : [...current, code]);
+  };
+
+  const changeApplianceShare = (code: ApplianceCode, sharePercent: number, maximumPercent: number) => {
+    const nextRate = maximumPercent > 0 ? Math.max(0, Math.min(1, sharePercent / maximumPercent)) : 0;
+    setApplianceShiftRates((current) => ({ ...current, [code]: nextRate }));
   };
 
   const scenarioOptions: Array<{ mode: LoadShiftMode; title: string; description: string }> = customerType === "주택용 TOU"
@@ -181,6 +216,8 @@ export default function Home() {
           <div className="section-heading"><div><p>01 · INPUT</p><h2>분석 조건</h2></div><button className="text-button" onClick={reset}>기본값으로 초기화</button></div>
           <div className="settings-grid">
             <label className="control-field"><FieldLabel>분석연도</FieldLabel><select value={analysisYear} onChange={(event) => setAnalysisYear(Number(event.target.value) as AnalysisYear)}><option value={2024}>2024</option><option value={2025}>2025</option><option value={2026}>2026 YTD</option></select></label>
+            <label className="control-field"><FieldLabel hint="미선택 시 전체">계절</FieldLabel><select value={seasonFilter} onChange={(event) => setSeasonFilter(event.target.value as AnalysisSeason)}><option value="ALL">전체 계절</option><option value="SHOULDER">봄·가을</option><option value="SUMMER">여름</option><option value="WINTER">겨울</option></select></label>
+            <label className="control-field"><FieldLabel hint="미선택 시 전체">요일</FieldLabel><select value={dayTypeFilter} onChange={(event) => setDayTypeFilter(event.target.value as AnalysisDayType)}><option value="ALL">전체 요일</option><option value="WEEKDAY">주중</option><option value="WEEKEND">주말</option></select></label>
             <label className="control-field"><FieldLabel>고객 유형</FieldLabel><select value={customerType} onChange={(event) => changeCustomerType(event.target.value as CustomerType)}><option>주택용 TOU</option><option>전기차 전체</option><option>전기차 완속 저압</option><option>전기차 급속·고압</option></select></label>
             <label className="control-field"><FieldLabel hint="호">대상 고객 수</FieldLabel><input className="formatted-number" inputMode="numeric" value={formatInteger(customerCount)} onChange={(event) => {
               const digits = event.target.value.replace(/[^0-9]/g, "");
@@ -208,7 +245,7 @@ export default function Home() {
             <div className="scenario-options">
               {scenarioOptions.map((option) => <button key={option.mode} className={`scenario-option ${scenario === option.mode ? "selected" : ""}`} onClick={() => setScenario(option.mode)}><span className="radio-dot" /><span><strong>{option.title}</strong><small>{option.description}</small></span></button>)}
             </div>
-            <div className="shift-control">
+            {scenario !== "RES_SCENARIO_2" ? <div className="shift-control">
               <div className="shift-value"><span>부하이전율</span><strong>{shiftRate}<small>%</small></strong></div>
               <div className="shift-slider-row">
                 <input type="range" min="0" max="100" step="1" value={shiftRate} onChange={(event) => setShiftRate(Number(event.target.value))} />
@@ -216,7 +253,11 @@ export default function Home() {
               </div>
               <div className="range-marks"><span>0%</span><span>50%</span><span>100%</span></div>
               <div className="route-row"><div><span>이전 출발</span><strong>{routeSource}</strong></div><span className="route-arrow">→</span><div><span>이전 도착</span><strong>발령시간</strong></div></div>
-            </div>
+            </div> : <div className="shift-control appliance-summary">
+              <div className="shift-value"><span>가전별 이전비중 합계</span><strong>{(result.selectedApplianceShare * 100).toFixed(1)}<small>%</small></strong></div>
+              <p>전체 13개 가전의 최대 이전가능량을 100%로 보고, 아래 슬라이더에서 가전별 기여분을 조절합니다.</p>
+              <div className="route-row"><div><span>이전 출발</span><strong>선택한 주요 가전</strong></div><span className="route-arrow">→</span><div><span>이전 도착</span><strong>발령시간</strong></div></div>
+            </div>}
           </div>
           {scenario === "RES_SCENARIO_2" && customerType === "주택용 TOU" ? <div className="appliance-selector">
             <div className="appliance-selector-head">
@@ -225,39 +266,100 @@ export default function Home() {
             </div>
             <div className="appliance-grid">
               {SELECTABLE_APPLIANCES.map((appliance) => {
-                const share = getApplianceShare(appliance.code, analysisYear) * 100;
-                return <label className={`appliance-check ${selectedAppliances.includes(appliance.code) ? "checked" : ""}`} key={appliance.code}>
-                  <input type="checkbox" checked={selectedAppliances.includes(appliance.code)} onChange={() => toggleAppliance(appliance.code)} />
-                  <span><strong>{appliance.label}</strong><small>{appliance.category} · {share > 0 ? `이전비중 ${share.toFixed(1)}%` : "해당 연도 이전량 없음"}</small></span>
-                </label>;
+                const selected = selectedAppliances.includes(appliance.code);
+                const maximumPercent = result.applianceMaximumShares[appliance.code] * 100;
+                const configuredPercent = selected ? maximumPercent * applianceShiftRates[appliance.code] : 0;
+                const zeroReason = appliance.code === "LIVING_ROOM_AC"
+                  ? "분석기간 발령일에 여름철 에어컨 이전대상 부하 없음"
+                  : appliance.code === "ROBOT_VACUUM"
+                    ? "사용시간이 발령시간 안에 있어 추가 이전량 없음"
+                    : "발령시간 밖의 이전대상 부하 없음";
+                return <div className={`appliance-item ${selected ? "checked" : ""}`} key={appliance.code}>
+                  <label className="appliance-check">
+                    <input type="checkbox" checked={selected} onChange={() => toggleAppliance(appliance.code)} />
+                    <span><strong>{appliance.label}</strong><small>{appliance.category}</small></span>
+                  </label>
+                  <div className="appliance-share-control">
+                    <div><span>설정 {configuredPercent.toFixed(1)}%</span><small>최대 {maximumPercent.toFixed(1)}%</small></div>
+                    <input
+                      aria-label={`${appliance.label} 이전비중`}
+                      type="range"
+                      min="0"
+                      max={Math.max(0.1, maximumPercent)}
+                      step="0.1"
+                      value={configuredPercent}
+                      disabled={!selected || maximumPercent === 0}
+                      onChange={(event) => changeApplianceShare(appliance.code, Number(event.target.value), maximumPercent)}
+                    />
+                    {maximumPercent === 0 ? <em>{zeroReason}</em> : null}
+                  </div>
+                </div>;
               })}
             </div>
-            <p className="appliance-note">가전별 비중은 {yearLabel} 실제 발령일의 계절·주중·주말 부하곡선에서 발령시간 밖의 이전 가능 사용량을 기준으로 한 참고값입니다. 계산엔진은 체크한 가전의 시간별 부하를 높은 요금 시간대부터 직접 이전하며, 전체부하를 이전하는 시나리오 1과 별도로 계산합니다.</p>
+            <p className="appliance-note">가전별 최대 비중은 {scopeLabel}의 선택 발령일에서 발령시간 밖에 존재하는 13개 가전의 최대 이전가능량 합계를 100%로 환산한 구성비입니다. 기본값은 각 가전의 최대치이며, 슬라이더를 낮추면 해당 가전의 이전량과 편익이 즉시 감소합니다.</p>
           </div> : null}
         </section>
 
         <section className="metric-grid" aria-label="분석 핵심 지표">
-          <article className="metric-card accent-blue"><p>발령일수</p><strong>{formatOneDecimal(result.eventDays)}<small>일</small></strong><span>{yearLabel} 적용 기준</span></article>
+          <article className="metric-card accent-blue"><p>발령일수</p><strong>{formatOneDecimal(result.eventDays)}<small>일</small></strong><span>{scopeLabel}</span></article>
           <article className="metric-card"><p>총 발령시간</p><strong>{formatOneDecimal(result.eventHours)}<small>시간</small></strong><span>일평균 {averageEventHours.toFixed(1)}시간</span></article>
           <article className="metric-card"><p>참여 고객</p><strong>{formatInteger(result.participatingCustomers)}<small>호</small></strong><span>전체의 {participation}%</span></article>
           <article className="metric-card accent-green"><p>부하 이전량</p><strong>{formatOneDecimal(result.grid.shiftedEnergyMwh)}<small>MWh</small></strong><span>에너지 총량 보존</span></article>
-          <article className="metric-card"><p>고객당 기준기간 편익</p><strong>{formatOneDecimal(result.customer.annualBenefitPerCustomerWon / 10_000)}<small>만원</small></strong><span>할인 및 부하이전 반영</span></article>
-          <article className="metric-card accent-blue"><p>참여고객 총편익</p><strong>{formatMillionWon(result.customer.totalAnnualBenefitWon)}<small>백만원</small></strong><span>참여 고객 합계</span></article>
+          <article className="metric-card"><p>고객당 기준기간 편익</p><strong>{formatInteger(result.customer.annualBenefitPerCustomerWon / 10_000)}<small>만원</small></strong><span>할인 및 부하이전 반영</span></article>
+          <article className="metric-card accent-blue"><p>참여고객 전체편익</p><strong>{formatMillionWon(result.customer.totalAnnualBenefitWon)}<small>백만원</small></strong><span>참여 고객 합계</span></article>
         </section>
 
         <section className="analysis-grid">
           <article className="section-card load-chart-card">
             <div className="section-heading compact"><div><p>03 · LOAD PROFILE</p><h2>시간별 전력사용량 변화</h2></div><div className="legend"><span><i className="legend-base" />현행</span><span><i className="legend-shifted" />부하이전 후</span></div></div>
             <div className="chart-callout"><StatusDot tone="amber" /> {eventMode === "ACTUAL" ? "10–16시" : `${startHour}–${endHour}시`} 전기예보 발령시간</div>
-            <div className="load-chart" role="img" aria-label="24시간 현행 및 부하이전 후 사용량 비교 그래프">
-              {result.baseLoadProfile.map((value, index) => {
-                const hour = index + 1;
-                const windowStart = eventMode === "ACTUAL" ? 10 : startHour;
-                const windowEnd = eventMode === "ACTUAL" ? 16 : endHour;
-                return <div className={`bar-slot ${hour >= windowStart && hour <= windowEnd ? "forecast-window" : ""}`} key={hour}><div className="bar-stack"><i className="bar base" style={{ height: `${(value / maxProfile) * 100}%` }} /><i className="bar shifted" style={{ height: `${(result.shiftedLoadProfile[index] / maxProfile) * 100}%` }} /></div><span>{hour % 3 === 1 ? hour : ""}</span></div>;
-              })}
+            <div className="load-line-chart" onMouseLeave={() => setHoveredHour(null)}>
+              <svg viewBox={`0 0 ${LINE_CHART.width} ${LINE_CHART.height}`} role="img" aria-label="24시간 현행 및 부하이전 후 사용량 꺾은선 그래프">
+                {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+                  const y = LINE_CHART.top + chartPlotHeight * (1 - ratio);
+                  return <g className="line-grid" key={ratio}><line x1={LINE_CHART.left} x2={LINE_CHART.width - LINE_CHART.right} y1={y} y2={y} /><text x={LINE_CHART.left - 7} y={y + 4}>{formatOneDecimal(maxProfile * ratio)}</text></g>;
+                })}
+                {(() => {
+                  const windowStart = eventMode === "ACTUAL" ? 10 : startHour;
+                  const windowEnd = eventMode === "ACTUAL" ? 16 : endHour;
+                  const x1 = chartX(Math.max(0, windowStart - 1)) - chartPlotWidth / 46;
+                  const x2 = chartX(Math.min(23, windowEnd - 1)) + chartPlotWidth / 46;
+                  return <rect className="forecast-band" x={x1} y={LINE_CHART.top} width={x2 - x1} height={chartPlotHeight} />;
+                })()}
+                <polyline className="profile-line base-line" points={linePoints(result.baseLoadProfile)} />
+                <polyline className="profile-line shifted-line" points={linePoints(result.shiftedLoadProfile)} />
+                {result.baseLoadProfile.map((value, index) => <g key={index}>
+                  <circle className="profile-point base-point" cx={chartX(index)} cy={chartY(value)} r="3" />
+                  <circle className="profile-point shifted-point" cx={chartX(index)} cy={chartY(result.shiftedLoadProfile[index])} r="3" />
+                  <rect
+                    className="point-hitarea"
+                    x={chartX(index) - chartPlotWidth / 46}
+                    y={LINE_CHART.top}
+                    width={chartPlotWidth / 23}
+                    height={chartPlotHeight}
+                    tabIndex={0}
+                    aria-label={`${index + 1}시 현행 ${formatOneDecimal(value)}kWh, 부하이전 후 ${formatOneDecimal(result.shiftedLoadProfile[index])}kWh`}
+                    onMouseEnter={() => setHoveredHour(index)}
+                    onFocus={() => setHoveredHour(index)}
+                    onBlur={() => setHoveredHour(null)}
+                  />
+                </g>)}
+                {[1, 4, 7, 10, 13, 16, 19, 22, 24].map((hour) => <text className="hour-label" x={chartX(hour - 1)} y={LINE_CHART.height - 9} key={hour}>{hour}</text>)}
+                <text className="axis-unit" x="4" y="12">kWh/호</text>
+                {hoveredHour !== null ? (() => {
+                  const x = chartX(hoveredHour);
+                  const boxX = Math.max(4, Math.min(LINE_CHART.width - 170, x - 82));
+                  return <g className="chart-tooltip">
+                    <line x1={x} x2={x} y1={LINE_CHART.top} y2={LINE_CHART.top + chartPlotHeight} />
+                    <rect x={boxX} y="7" width="166" height="58" rx="8" />
+                    <text x={boxX + 10} y="25">{hoveredHour + 1}시</text>
+                    <text x={boxX + 10} y="42">현행 {formatOneDecimal(result.baseLoadProfile[hoveredHour])} kWh</text>
+                    <text x={boxX + 10} y="57">이전 후 {formatOneDecimal(result.shiftedLoadProfile[hoveredHour])} kWh</text>
+                  </g>;
+                })() : null}
+              </svg>
             </div>
-            <p className="chart-note">원자료의 계절별 부하형상을 발령일수로 가중해 표시합니다. 부하이전 전후의 24시간 에너지 총량은 동일합니다.</p>
+            <p className="chart-note">{scopeLabel} 부하곡선입니다. 점에 커서를 올리거나 키보드로 선택하면 시간별 현행·이전 후 사용량을 확인할 수 있으며, 부하이전 전후의 24시간 에너지 총량은 동일합니다.</p>
           </article>
 
           <article className="section-card result-card">
@@ -271,14 +373,14 @@ export default function Home() {
         {result.warnings.length ? <section className="assumption-strip"><strong>적용 가정</strong><ul>{result.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></section> : null}
 
         <section className="section-card calendar-card">
-          <div className="section-heading compact"><div><p>04 · EVENT CALENDAR</p><h2>{yearLabel} 월별 전기예보 발령현황</h2></div><span className="total-chip">합계 {result.eventDays}일</span></div>
+          <div className="section-heading compact"><div><p>04 · EVENT CALENDAR</p><h2>{scopeLabel} 월별 전기예보 발령현황</h2></div><span className="total-chip">합계 {result.eventDays}일</span></div>
           <div className="month-chart">{result.monthlyEventDays.map((value, index) => <div className="month-column" key={months[index]}><strong>{value || "-"}</strong><div><i style={{ height: `${Math.max(4, (value / Math.max(15, ...result.monthlyEventDays)) * 100)}%` }} className={value === 0 ? "zero" : ""} /></div><span>{months[index]}</span></div>)}</div>
         </section>
 
         <section className="method-strip"><div><span>1</span><p><strong>발령조건 판정</strong>SMP·시간대 기준</p></div><i>→</i><div><span>2</span><p><strong>할인 적용</strong>중복할인 우선순위</p></div><i>→</i><div><span>3</span><p><strong>부하 재배분</strong>에너지 총량 보존</p></div><i>→</i><div><span>4</span><p><strong>편익 산정</strong>고객·한전·계통</p></div></section>
       </div>
 
-      <footer><div className="page-shell footer-inner"><span>PRAS · 탐라는 전기예보제</span><p>시간대별 부하·요금·SMP 재계산 엔진 · 출력제어 흡수율 85% 가정</p></div></footer>
+      <footer><div className="page-shell footer-inner"><span>PRAS · 탐라는 전기예보제</span><p>시간대별 부하·요금·SMP 재계산 엔진 · 출력제어 회피율 85% 가정</p></div></footer>
     </main>
   );
 }
