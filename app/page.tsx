@@ -232,7 +232,7 @@ export default function Home() {
                 </label>;
               })}
             </div>
-            <p className="appliance-note">가전별 비중은 {yearLabel} 실제 발령일의 계절·주중·주말 부하곡선에서 10–16시 밖의 이전 가능 사용량을 기준으로 산정합니다. 전체 선택은 13개 가전의 이전 가능량 100%를 뜻하며, 전체부하를 이전하는 시나리오 1과는 별도로 계산됩니다.</p>
+            <p className="appliance-note">가전별 비중은 {yearLabel} 실제 발령일의 계절·주중·주말 부하곡선에서 발령시간 밖의 이전 가능 사용량을 기준으로 한 참고값입니다. 계산엔진은 체크한 가전의 시간별 부하를 높은 요금 시간대부터 직접 이전하며, 전체부하를 이전하는 시나리오 1과 별도로 계산합니다.</p>
           </div> : null}
         </section>
 
@@ -241,7 +241,7 @@ export default function Home() {
           <article className="metric-card"><p>총 발령시간</p><strong>{formatOneDecimal(result.eventHours)}<small>시간</small></strong><span>일평균 {averageEventHours.toFixed(1)}시간</span></article>
           <article className="metric-card"><p>참여 고객</p><strong>{formatInteger(result.participatingCustomers)}<small>호</small></strong><span>전체의 {participation}%</span></article>
           <article className="metric-card accent-green"><p>부하 이전량</p><strong>{formatOneDecimal(result.grid.shiftedEnergyMwh)}<small>MWh</small></strong><span>에너지 총량 보존</span></article>
-          <article className="metric-card"><p>고객당 연간 편익</p><strong>{formatOneDecimal(result.customer.annualBenefitPerCustomerWon / 10_000)}<small>만원</small></strong><span>할인 및 부하이전 반영</span></article>
+          <article className="metric-card"><p>고객당 기준기간 편익</p><strong>{formatOneDecimal(result.customer.annualBenefitPerCustomerWon / 10_000)}<small>만원</small></strong><span>할인 및 부하이전 반영</span></article>
           <article className="metric-card accent-blue"><p>참여고객 총편익</p><strong>{formatMillionWon(result.customer.totalAnnualBenefitWon)}<small>백만원</small></strong><span>참여 고객 합계</span></article>
         </section>
 
@@ -257,14 +257,14 @@ export default function Home() {
                 return <div className={`bar-slot ${hour >= windowStart && hour <= windowEnd ? "forecast-window" : ""}`} key={hour}><div className="bar-stack"><i className="bar base" style={{ height: `${(value / maxProfile) * 100}%` }} /><i className="bar shifted" style={{ height: `${(result.shiftedLoadProfile[index] / maxProfile) * 100}%` }} /></div><span>{hour % 3 === 1 ? hour : ""}</span></div>;
               })}
             </div>
-            <p className="chart-note">고객유형별 엑셀 기준 부하형상을 정규화해 표시합니다. 부하이전 전후의 24시간 에너지 총량은 동일합니다.</p>
+            <p className="chart-note">원자료의 계절별 부하형상을 발령일수로 가중해 표시합니다. 부하이전 전후의 24시간 에너지 총량은 동일합니다.</p>
           </article>
 
           <article className="section-card result-card">
             <div className="result-tabs" role="tablist" aria-label="분석 관점 선택">{(["고객", "한전", "계통"] as ResultTab[]).map((tab) => <button key={tab} className={resultTab === tab ? "active" : ""} onClick={() => setResultTab(tab)} role="tab" aria-selected={resultTab === tab}>{tab}</button>)}</div>
             <div className="result-intro"><p>{activeResult.eyebrow}</p><h2>{activeResult.title}</h2></div>
             <div className="result-list">{activeResult.items.map(([label, value]) => <div key={label}><span>{label}</span><strong className="calculated">{value}</strong></div>)}</div>
-            <div className="engine-notice connected"><span>계산엔진 연결 상태</span><strong><StatusDot tone="green" /> 정상</strong><small>Excel 보간 엔진 {result.engineVersion}{result.warnings.length ? ` · 가정 ${result.warnings.length}건` : " · 기준점 일치"}</small></div>
+            <div className="engine-notice connected"><span>계산엔진 연결 상태</span><strong><StatusDot tone="green" /> 정상</strong><small>시간대별 검산 엔진 {result.engineVersion}{result.warnings.length ? ` · 검토사항 ${result.warnings.length}건` : " · 검산 완료"}</small></div>
           </article>
         </section>
 
@@ -278,7 +278,7 @@ export default function Home() {
         <section className="method-strip"><div><span>1</span><p><strong>발령조건 판정</strong>SMP·시간대 기준</p></div><i>→</i><div><span>2</span><p><strong>할인 적용</strong>중복할인 우선순위</p></div><i>→</i><div><span>3</span><p><strong>부하 재배분</strong>에너지 총량 보존</p></div><i>→</i><div><span>4</span><p><strong>편익 산정</strong>고객·한전·계통</p></div></section>
       </div>
 
-      <footer><div className="page-shell footer-inner"><span>PRAS · 탐라는 전기예보제</span><p>Excel 기준점 보정 계산엔진 · 한전 구입비는 SMP 회피단가 130원/kWh, 출력제어 흡수율 85% 가정</p></div></footer>
+      <footer><div className="page-shell footer-inner"><span>PRAS · 탐라는 전기예보제</span><p>시간대별 부하·요금·SMP 재계산 엔진 · 출력제어 흡수율 85% 가정</p></div></footer>
     </main>
   );
 }
