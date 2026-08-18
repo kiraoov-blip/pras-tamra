@@ -7,7 +7,7 @@ import type {
 } from "./types";
 import { getSelectedApplianceShare, SELECTABLE_APPLIANCES } from "./appliances";
 
-export const ENGINE_VERSION = "1.2.0-scenario-models";
+export const ENGINE_VERSION = "1.3.0-reference-interpolation";
 
 type Point = readonly [shiftPercent: number, benefitWon: number];
 type BaseCustomerType = Exclude<CustomerTypeCode, "EV_TOTAL">;
@@ -21,6 +21,16 @@ const RESIDENTIAL_2024: readonly Point[] = [
   [0, 4129.802627900179], [10, 4991.970800924566],
   [30, 6716.307146973268], [50, 8440.643493022013],
   [80, 11027.148012095131], [100, 12751.484358143862],
+];
+
+// 「판매수입 변화 계산용」의 주택용 TOU 시나리오 1 집계값을
+// 화면 기본 대상고객 1,200호 기준의 고객당 편익으로 환산했다.
+// 0·10·50·100% 사이 값은 선형 보간해 1% 단위 입력에도 연속적으로 반응한다.
+const RESIDENTIAL_SCENARIO_1_2025: readonly Point[] = [
+  [0, 11069128.669753268 / 1200],
+  [10, 13266506.57830143 / 1200],
+  [50, 22056018.212494195 / 1200],
+  [100, 33042907.755235 / 1200],
 ];
 
 const EV_SLOW_USAGE = 1949025.8806533858;
@@ -128,9 +138,16 @@ function getComponents(customerType: CustomerTypeCode): Array<{ type: BaseCustom
   return [{ type: customerType, weight: 1 }];
 }
 
-function componentShiftRate(type: BaseCustomerType, mode: LoadShiftMode, requestedRate: number) {
-  if (mode === "EV_SCENARIO_2_1" && type !== "EV_FAST_HIGH_VOLTAGE") return 0;
-  if (mode === "EV_SCENARIO_2_2" && type !== "EV_SLOW_LOW_VOLTAGE") return 0;
+function componentShiftRate(
+  aggregateType: CustomerTypeCode,
+  type: BaseCustomerType,
+  mode: LoadShiftMode,
+  requestedRate: number,
+) {
+  // 전기차 전체는 시나리오 2-1에 급속, 2-2에 완속 실적 비중만 반영한다.
+  // 개별 전기차 탭에서는 선택한 고객군의 부하곡선에 해당 이전 경로를 적용한다.
+  if (aggregateType === "EV_TOTAL" && mode === "EV_SCENARIO_2_1" && type !== "EV_FAST_HIGH_VOLTAGE") return 0;
+  if (aggregateType === "EV_TOTAL" && mode === "EV_SCENARIO_2_2" && type !== "EV_SLOW_LOW_VOLTAGE") return 0;
   return requestedRate;
 }
 
@@ -149,6 +166,19 @@ function componentResult(
 
   if (input.shiftMode === "SCENARIO_1") {
     const movedKwh = calibration.scenarioOneMovedKwhAt100 * yearMovementScale * effectiveShiftRate * eventScale;
+    if (type === "RESIDENTIAL_TOU") {
+      const referenceBase = interpolate(RESIDENTIAL_SCENARIO_1_2025, 0);
+      const referenceShifted = interpolate(RESIDENTIAL_SCENARIO_1_2025, effectiveShiftRate);
+      const shiftIncrementAtHalfDiscount = referenceShifted - referenceBase;
+      const shiftBenefit = halfSavingPerKwh === 0
+        ? 0
+        : shiftIncrementAtHalfDiscount * (selectedSavingPerKwh / halfSavingPerKwh);
+      return {
+        benefit: ((referenceBase * (input.discountRate / 0.5)) + shiftBenefit)
+          * yearMovementScale * eventScale,
+        movedKwh,
+      };
+    }
     return {
       benefit: (discountOnlyBenefit * eventScale) + movedKwh * selectedSavingPerKwh,
       movedKwh,
@@ -230,7 +260,7 @@ export function runSimulation(input: SimulationInput): SimulationResult {
   let shiftedKwhPerCustomer = 0;
   let currentBill = 0;
   components.forEach(({ type, weight }) => {
-    const effectiveRate = componentShiftRate(type, input.shiftMode, requestedShiftRate);
+    const effectiveRate = componentShiftRate(input.customerType, type, input.shiftMode, requestedShiftRate);
     const result = componentResult(type, input, effectiveRate, event.scale);
     benefitPerCustomer += result.benefit * weight;
     shiftedKwhPerCustomer += result.movedKwh * weight;

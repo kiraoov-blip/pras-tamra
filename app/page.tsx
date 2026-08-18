@@ -17,17 +17,28 @@ const CUSTOMER_CODES: Record<CustomerType, CustomerTypeCode> = {
   "전기차 급속·고압": "EV_FAST_HIGH_VOLTAGE",
 };
 
-function formatNumber(value: number) {
+function formatInteger(value: number) {
   return new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 0 }).format(value);
 }
 
+function formatOneDecimal(value: number) {
+  return new Intl.NumberFormat("ko-KR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value);
+}
+
 function formatWon(value: number) {
-  const rounded = Math.round(value);
-  return `${rounded > 0 ? "+" : ""}${formatNumber(rounded)}원`;
+  return `${value > 0 ? "+" : ""}${formatOneDecimal(value)}원`;
 }
 
 function formatMwh(value: number) {
-  return `${new Intl.NumberFormat("ko-KR", { maximumFractionDigits: value < 10 ? 1 : 0 }).format(value)}MWh`;
+  return `${formatOneDecimal(value)}MWh`;
+}
+
+function formatMillionWon(value: number) {
+  return formatOneDecimal(value / 1_000_000);
+}
+
+function clampPercent(value: number) {
+  return Math.max(0, Math.min(100, Math.round(value)));
 }
 
 function FieldLabel({ children, hint }: { children: React.ReactNode; hint?: string }) {
@@ -90,7 +101,7 @@ export default function Home() {
       items: [
         ["고객당 기준기간 편익", formatWon(result.customer.annualBenefitPerCustomerWon)],
         ["참여고객 전체 편익", formatWon(result.customer.totalAnnualBenefitWon)],
-        ["제도 적용 후 고객요금", `${formatNumber(result.customer.newAnnualBillWon)}원`],
+        ["제도 적용 후 고객요금", `${formatOneDecimal(result.customer.newAnnualBillWon)}원`],
       ],
     },
     한전: {
@@ -140,8 +151,8 @@ export default function Home() {
     ]
     : [
       { mode: "SCENARIO_1", title: "시나리오 1 · 전체부하 균등이전", description: "계약종별 전체 부하에서 발령시간 수만큼 최대부하 시간대 사용량을 균등 이전" },
-      ...(customerType !== "전기차 완속 저압" ? [{ mode: "EV_SCENARIO_2_1" as const, title: "시나리오 2-1 · 공공용 급속충전", description: "급속 1시간 충전을 최대부하 시간대에서 발령 시작시간으로 이전" }] : []),
-      ...(customerType !== "전기차 급속·고압" ? [{ mode: "EV_SCENARIO_2_2" as const, title: "시나리오 2-2 · 개인용 완속충전", description: "심야 3시간 완속충전을 발령시간대로 균등 이전" }] : []),
+      { mode: "EV_SCENARIO_2_1" as const, title: "시나리오 2-1 · 공공용 급속충전", description: "급속 1시간 충전을 최대부하 시간대에서 발령 시작시간으로 이전" },
+      { mode: "EV_SCENARIO_2_2" as const, title: "시나리오 2-2 · 개인용 완속충전", description: "심야 3시간 완속충전을 발령시간대로 균등 이전" },
     ];
 
   const routeSource = scenario === "RES_SCENARIO_2"
@@ -157,7 +168,6 @@ export default function Home() {
       <header className="hero">
         <div className="page-shell hero-grid">
           <div className="hero-title">
-            <span className="brand-mark" aria-hidden="true">P</span>
             <div>
               <h1>탐라는 전기예보 요금·편익 분석 시뮬레이터(PRAS - TAMRA)</h1>
               <p>Pricing and Revenue Analysis Simulator - 탐라는 전기예보</p>
@@ -172,8 +182,11 @@ export default function Home() {
           <div className="settings-grid">
             <label className="control-field"><FieldLabel>분석연도</FieldLabel><select value={analysisYear} onChange={(event) => setAnalysisYear(Number(event.target.value) as AnalysisYear)}><option value={2024}>2024</option><option value={2025}>2025</option><option value={2026}>2026 YTD</option></select></label>
             <label className="control-field"><FieldLabel>고객 유형</FieldLabel><select value={customerType} onChange={(event) => changeCustomerType(event.target.value as CustomerType)}><option>주택용 TOU</option><option>전기차 전체</option><option>전기차 완속 저압</option><option>전기차 급속·고압</option></select></label>
-            <label className="control-field"><FieldLabel hint="호">대상 고객 수</FieldLabel><input type="number" min="1" value={customerCount} onChange={(event) => setCustomerCount(Math.max(1, Number(event.target.value) || 1))} /></label>
-            <label className="control-field"><FieldLabel hint="월">기준 사용량</FieldLabel><div className="unit-input"><input value={monthlyUsage} readOnly /><span>kWh</span></div></label>
+            <label className="control-field"><FieldLabel hint="호">대상 고객 수</FieldLabel><input className="formatted-number" inputMode="numeric" value={formatInteger(customerCount)} onChange={(event) => {
+              const digits = event.target.value.replace(/[^0-9]/g, "");
+              setCustomerCount(Math.max(1, Number(digits) || 1));
+            }} /></label>
+            <label className="control-field"><FieldLabel hint="월">기준 사용량</FieldLabel><div className="unit-input"><input value={formatOneDecimal(monthlyUsage)} readOnly /><span>kWh</span></div></label>
             <label className="control-field range-field"><FieldLabel hint={`${participation}%`}>제도 참여율</FieldLabel><input type="range" min="0" max="100" step="5" value={participation} onChange={(event) => setParticipation(Number(event.target.value))} /></label>
             <label className="control-field range-field"><FieldLabel hint={`${discount}%`}>발령시간 할인율</FieldLabel><input type="range" min="0" max="100" step="5" value={discount} onChange={(event) => setDiscount(Number(event.target.value))} /></label>
             <div className="control-field"><FieldLabel>주말할인 중복처리</FieldLabel><button type="button" className={`toggle-row ${weekendPriority ? "active" : ""}`} onClick={() => setWeekendPriority((value) => !value)} aria-pressed={weekendPriority}><span className="toggle"><i /></span><span>{weekendPriority ? "기존 주말할인 우선" : "전기예보 할인 우선"}</span></button></div>
@@ -197,7 +210,10 @@ export default function Home() {
             </div>
             <div className="shift-control">
               <div className="shift-value"><span>부하이전율</span><strong>{shiftRate}<small>%</small></strong></div>
-              <input type="range" min="0" max="100" step="10" value={shiftRate} onChange={(event) => setShiftRate(Number(event.target.value))} />
+              <div className="shift-slider-row">
+                <input type="range" min="0" max="100" step="1" value={shiftRate} onChange={(event) => setShiftRate(Number(event.target.value))} />
+                <label className="percent-entry"><input aria-label="부하이전율 직접 입력" type="number" min="0" max="100" step="1" value={shiftRate} onChange={(event) => setShiftRate(clampPercent(Number(event.target.value) || 0))} /><span>%</span></label>
+              </div>
               <div className="range-marks"><span>0%</span><span>50%</span><span>100%</span></div>
               <div className="route-row"><div><span>이전 출발</span><strong>{routeSource}</strong></div><span className="route-arrow">→</span><div><span>이전 도착</span><strong>발령시간</strong></div></div>
             </div>
@@ -221,10 +237,12 @@ export default function Home() {
         </section>
 
         <section className="metric-grid" aria-label="분석 핵심 지표">
-          <article className="metric-card accent-blue"><p>발령일수</p><strong>{result.eventDays}<small>일</small></strong><span>{yearLabel} 적용 기준</span></article>
-          <article className="metric-card"><p>총 발령시간</p><strong>{result.eventHours}<small>시간</small></strong><span>일평균 {averageEventHours.toFixed(2)}시간</span></article>
-          <article className="metric-card"><p>참여 고객</p><strong>{formatNumber(result.participatingCustomers)}<small>호</small></strong><span>전체의 {participation}%</span></article>
-          <article className="metric-card accent-green"><p>예상 이전량</p><strong>{formatNumber(result.grid.shiftedEnergyMwh)}<small>MWh</small></strong><span>에너지 총량 보존</span></article>
+          <article className="metric-card accent-blue"><p>발령일수</p><strong>{formatOneDecimal(result.eventDays)}<small>일</small></strong><span>{yearLabel} 적용 기준</span></article>
+          <article className="metric-card"><p>총 발령시간</p><strong>{formatOneDecimal(result.eventHours)}<small>시간</small></strong><span>일평균 {averageEventHours.toFixed(1)}시간</span></article>
+          <article className="metric-card"><p>참여 고객</p><strong>{formatInteger(result.participatingCustomers)}<small>호</small></strong><span>전체의 {participation}%</span></article>
+          <article className="metric-card accent-green"><p>부하 이전량</p><strong>{formatOneDecimal(result.grid.shiftedEnergyMwh)}<small>MWh</small></strong><span>에너지 총량 보존</span></article>
+          <article className="metric-card"><p>고객당 연간 편익</p><strong>{formatOneDecimal(result.customer.annualBenefitPerCustomerWon / 10_000)}<small>만원</small></strong><span>할인 및 부하이전 반영</span></article>
+          <article className="metric-card accent-blue"><p>참여고객 총편익</p><strong>{formatMillionWon(result.customer.totalAnnualBenefitWon)}<small>백만원</small></strong><span>참여 고객 합계</span></article>
         </section>
 
         <section className="analysis-grid">

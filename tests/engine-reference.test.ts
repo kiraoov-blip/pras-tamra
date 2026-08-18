@@ -20,6 +20,27 @@ test("2025 주택용 엑셀 기준점을 재현한다", () => {
   assert.ok(Math.abs(simulate({ shiftMode: "RES_SCENARIO_2", shiftRate: 1 }).customer.annualBenefitPerCustomerWon - 27537.823514739648) < 0.001);
 });
 
+test("주택용 시나리오 1은 판매수입 엑셀 집계 기준점을 통과하고 1% 단위로 보간한다", () => {
+  const referenceTotals = [
+    [0, 11069128.669753268],
+    [0.1, 13266506.57830143],
+    [0.5, 22056018.212494195],
+    [1, 33042907.755235],
+  ] as const;
+  referenceTotals.forEach(([shiftRate, expectedTotal]) => {
+    const result = simulate({
+      shiftMode: "SCENARIO_1",
+      shiftRate,
+      customerCount: 1200,
+      participationRate: 1,
+    });
+    assert.ok(Math.abs(result.customer.totalAnnualBenefitWon - expectedTotal) < 0.001);
+  });
+  const at10 = simulate({ shiftMode: "SCENARIO_1", shiftRate: 0.1 });
+  const at11 = simulate({ shiftMode: "SCENARIO_1", shiftRate: 0.11 });
+  assert.ok(at11.customer.annualBenefitPerCustomerWon > at10.customer.annualBenefitPerCustomerWon);
+});
+
 test("2024 주택용 기준점과 2026 YTD 발령실적을 재현한다", () => {
   assert.ok(Math.abs(simulate({ analysisYear: 2024, shiftMode: "RES_SCENARIO_2" }).customer.annualBenefitPerCustomerWon - 8440.643493022013) < 0.001);
   const ytd = simulate({ analysisYear: 2026 });
@@ -78,6 +99,10 @@ test("전기차 전체는 완속·급속 실적 비중을 합산하고 세 시�
   const scenario22 = simulate({ customerType: "EV_TOTAL", shiftMode: "EV_SCENARIO_2_2" });
   assert.notEqual(total.grid.shiftedEnergyMwh, scenario21.grid.shiftedEnergyMwh);
   assert.notEqual(scenario21.grid.shiftedEnergyMwh, scenario22.grid.shiftedEnergyMwh);
+
+  const slowScenario21 = simulate({ customerType: "EV_SLOW_LOW_VOLTAGE", shiftMode: "EV_SCENARIO_2_1" });
+  const slowNoShift = simulate({ customerType: "EV_SLOW_LOW_VOLTAGE", shiftMode: "EV_SCENARIO_2_1", shiftRate: 0 });
+  assert.ok(slowScenario21.grid.shiftedEnergyMwh > slowNoShift.grid.shiftedEnergyMwh);
 });
 
 test("음수 SMP 임계값이면 업로드 자료의 0원 발령시간이 제외된다", () => {
