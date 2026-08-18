@@ -4,8 +4,9 @@ import type {
   SimulationInput,
   SimulationResult,
 } from "./types";
+import { getSelectedApplianceShare, SELECTABLE_APPLIANCES } from "./appliances";
 
-export const ENGINE_VERSION = "1.0.0-excel-calibrated";
+export const ENGINE_VERSION = "1.1.0-appliance-selection";
 
 type Point = readonly [shiftPercent: number, benefitWon: number];
 
@@ -108,14 +109,13 @@ function eventSelection(input: SimulationInput) {
   };
 }
 
-function shiftedProfile(customerType: CustomerTypeCode, shiftRate: number, selective: boolean) {
+function shiftedProfile(customerType: CustomerTypeCode, effectiveShiftRate: number) {
   const base = [...CALIBRATION[customerType].baseProfile];
   const shifted = [...base];
-  const effectiveRate = shiftRate * (selective ? 0.7 : 1);
   const sourceHours = customerType === "RESIDENTIAL_TOU" ? [17,18,19,20,21] : [0,1,2,22,23];
   const destinationHours = [9,10,11,12,13,14,15];
-  const removable = sourceHours.reduce((sum, hour) => sum + base[hour] * 0.22 * effectiveRate, 0);
-  sourceHours.forEach((hour) => { shifted[hour] -= base[hour] * 0.22 * effectiveRate; });
+  const removable = sourceHours.reduce((sum, hour) => sum + base[hour] * 0.22 * effectiveShiftRate, 0);
+  sourceHours.forEach((hour) => { shifted[hour] -= base[hour] * 0.22 * effectiveShiftRate; });
   destinationHours.forEach((hour) => { shifted[hour] += removable / destinationHours.length; });
   return { base, shifted };
 }
@@ -136,9 +136,14 @@ export function runSimulation(input: SimulationInput): SimulationResult {
   const event = eventSelection(input);
   const participatingCustomers = Math.round(input.customerCount * input.participationRate);
   const selective = input.shiftMode === "SELECTIVE";
-  const effectiveShiftRate = input.shiftRate * (selective ? 0.7 : 1);
+  const selectedApplianceShare = selective && input.customerType === "RESIDENTIAL_TOU"
+    ? getSelectedApplianceShare(input.selectedAppliances, input.analysisYear)
+    : 1;
+  const selectedCodes = new Set(input.selectedAppliances);
+  const selectedApplianceCount = SELECTABLE_APPLIANCES.filter(({ code }) => selectedCodes.has(code)).length;
+  const effectiveShiftRate = input.shiftRate * selectedApplianceShare;
   const half = benefitAtHalfDiscount(input.customerType, input.analysisYear, effectiveShiftRate, input.weekendDiscountPriority);
-  const halfIncrement = (half.shifted - half.base) * (selective ? 1.15 : 1);
+  const halfIncrement = half.shifted - half.base;
   const halfSavingPerKwh = calibration.sourceRate - calibration.destinationRate * 0.5;
   const selectedSavingPerKwh = calibration.sourceRate - calibration.destinationRate * (1 - input.discountRate);
   const discountOnlyBenefit = half.base * (input.discountRate / 0.5);
@@ -153,9 +158,9 @@ export function runSimulation(input: SimulationInput): SimulationResult {
   const currentSales = currentBill * participatingCustomers;
   const salesChange = -totalBenefit;
   const smpCostChange = -(shiftedEnergyMwh * 1000 * 130);
-  const profiles = shiftedProfile(input.customerType, input.shiftRate, selective);
+  const profiles = shiftedProfile(input.customerType, effectiveShiftRate);
 
-  if (selective) warnings.push("선택부하는 엑셀 전체부하 기준의 70%를 이전하고, 이전 kWh당 편익은 15% 높다는 가정을 적용했습니다.");
+  if (selective && input.customerType === "RESIDENTIAL_TOU" && selectedApplianceCount === 0) warnings.push("선택된 가전이 없어 부하이전량은 0으로 계산했습니다.");
   if (input.customerType === "RESIDENTIAL_TOU" && !input.weekendDiscountPriority) warnings.push("주택용 주말 중복처리 해제 효과는 엑셀에 별도 기준점이 없어 현 기준점과 동일하게 처리했습니다.");
   if (input.analysisYear !== 2025 && input.customerType !== "RESIDENTIAL_TOU") warnings.push("EV의 2024·2026 값은 2025 EV 기준점에 해당 연도 발령실적 보정계수를 적용했습니다.");
   if (input.eventRule.mode === "RULE") warnings.push("SMP 자동판정은 업로드 자료에 포함된 비양(0원) 발령 후보일 내에서 재산정합니다.");
@@ -165,6 +170,9 @@ export function runSimulation(input: SimulationInput): SimulationResult {
     eventDays: event.days,
     eventHours: event.hours,
     participatingCustomers,
+    selectedApplianceCount,
+    selectableApplianceCount: SELECTABLE_APPLIANCES.length,
+    selectedApplianceShare,
     monthlyEventDays: event.months,
     baseLoadProfile: profiles.base,
     shiftedLoadProfile: profiles.shifted,

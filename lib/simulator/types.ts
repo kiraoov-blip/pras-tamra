@@ -7,6 +7,20 @@ export type CustomerTypeCode =
 
 export type LoadShiftMode = "AGGREGATE" | "SELECTIVE";
 export type EventMode = "ACTUAL" | "RULE";
+export type ApplianceCode =
+  | "MOBILE_IT"
+  | "GAME_CONSOLE"
+  | "DISHWASHER"
+  | "FOOD_WASTE_PROCESSOR"
+  | "WASHER"
+  | "CLOTHES_DRYER"
+  | "CLOTHING_CARE"
+  | "ROBOT_VACUUM"
+  | "CORDLESS_VACUUM"
+  | "IRON"
+  | "LIVING_ROOM_AC"
+  | "HEAT_PUMP_HEATING"
+  | "BOILER_CIRCULATION_PUMP";
 
 export interface EventRule {
   mode: EventMode;
@@ -23,6 +37,7 @@ export interface SimulationInput {
   discountRate: number;
   shiftRate: number;
   shiftMode: LoadShiftMode;
+  selectedAppliances: ApplianceCode[];
   weekendDiscountPriority: boolean;
   eventRule: EventRule;
 }
@@ -53,6 +68,9 @@ export interface SimulationResult {
   eventDays: number;
   eventHours: number;
   participatingCustomers: number;
+  selectedApplianceCount: number;
+  selectableApplianceCount: number;
+  selectedApplianceShare: number;
   monthlyEventDays: number[];
   baseLoadProfile: number[];
   shiftedLoadProfile: number[];

@@ -3,6 +3,7 @@ import test from "node:test";
 // Explicit extensions let Node's built-in TypeScript stripper run this test without a loader.
 import { DEFAULT_SIMULATION_INPUT } from "../lib/simulator/defaults.ts";
 import { runSimulation } from "../lib/simulator/engine.ts";
+import { ALL_APPLIANCE_CODES } from "../lib/simulator/appliances.ts";
 import type { SimulationInput } from "../lib/simulator/types.ts";
 
 function simulate(overrides: Partial<SimulationInput> = {}) {
@@ -44,6 +45,25 @@ test("입력 변경이 편익과 이전량에 반영되고 부하 총량은 보�
   assert.equal(changed.participatingCustomers, 720);
   const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
   assert.ok(Math.abs(sum(changed.baseLoadProfile) - sum(changed.shiftedLoadProfile)) < 1e-9);
+});
+
+test("가전 선택형은 전체 선택 시 일괄 이전과 같고 해제한 가전만 제외한다", () => {
+  const aggregate = simulate();
+  const allSelected = simulate({ shiftMode: "SELECTIVE", selectedAppliances: [...ALL_APPLIANCE_CODES] });
+  assert.ok(Math.abs(allSelected.customer.annualBenefitPerCustomerWon - aggregate.customer.annualBenefitPerCustomerWon) < 0.001);
+  assert.ok(Math.abs(allSelected.grid.shiftedEnergyMwh - aggregate.grid.shiftedEnergyMwh) < 1e-9);
+
+  const noneSelected = simulate({ shiftMode: "SELECTIVE", selectedAppliances: [] });
+  const noShift = simulate({ shiftRate: 0 });
+  assert.ok(Math.abs(noneSelected.customer.annualBenefitPerCustomerWon - noShift.customer.annualBenefitPerCustomerWon) < 0.001);
+  assert.equal(noneSelected.grid.shiftedEnergyMwh, 0);
+
+  const withoutHeatPump = simulate({
+    shiftMode: "SELECTIVE",
+    selectedAppliances: ALL_APPLIANCE_CODES.filter((code) => code !== "HEAT_PUMP_HEATING"),
+  });
+  assert.ok(withoutHeatPump.grid.shiftedEnergyMwh < aggregate.grid.shiftedEnergyMwh);
+  assert.ok(Math.abs(withoutHeatPump.selectedApplianceShare - (1 - 140.4 / 319.03)) < 1e-9);
 });
 
 test("음수 SMP 임계값이면 업로드 자료의 0원 발령시간이 제외된다", () => {

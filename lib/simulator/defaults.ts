@@ -1,4 +1,5 @@
 import type { EventRule, SimulationInput } from "./types";
+import { ALL_APPLIANCE_CODES } from "./appliances";
 
 export const DEFAULT_EVENT_RULE: EventRule = {
   mode: "ACTUAL",
@@ -15,6 +16,7 @@ export const DEFAULT_SIMULATION_INPUT: SimulationInput = {
   discountRate: 0.5,
   shiftRate: 0.5,
   shiftMode: "AGGREGATE",
+  selectedAppliances: [...ALL_APPLIANCE_CODES],
   weekendDiscountPriority: true,
   eventRule: DEFAULT_EVENT_RULE,
 };

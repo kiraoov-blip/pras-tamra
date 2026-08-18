@@ -3,7 +3,8 @@
 import { useMemo, useState } from "react";
 import { REFERENCE_MONTHLY_USAGE_KWH } from "@/lib/simulator/defaults";
 import { runSimulation } from "@/lib/simulator/engine";
-import type { AnalysisYear, CustomerTypeCode, EventMode } from "@/lib/simulator/types";
+import { ALL_APPLIANCE_CODES, getApplianceShare, SELECTABLE_APPLIANCES } from "@/lib/simulator/appliances";
+import type { AnalysisYear, ApplianceCode, CustomerTypeCode, EventMode } from "@/lib/simulator/types";
 
 type CustomerType = "주택용 TOU" | "전기차 완속 저압" | "전기차 급속·고압";
 type ResultTab = "고객" | "한전" | "계통";
@@ -44,6 +45,7 @@ export default function Home() {
   const [discount, setDiscount] = useState(50);
   const [shiftRate, setShiftRate] = useState(50);
   const [scenario, setScenario] = useState<"aggregate" | "smart">("aggregate");
+  const [selectedAppliances, setSelectedAppliances] = useState<ApplianceCode[]>([...ALL_APPLIANCE_CODES]);
   const [weekendPriority, setWeekendPriority] = useState(true);
   const [eventMode, setEventMode] = useState<EventMode>("ACTUAL");
   const [smpThreshold, setSmpThreshold] = useState(0);
@@ -62,6 +64,7 @@ export default function Home() {
     discountRate: discount / 100,
     shiftRate: shiftRate / 100,
     shiftMode: scenario === "aggregate" ? "AGGREGATE" : "SELECTIVE",
+    selectedAppliances,
     weekendDiscountPriority: weekendPriority,
     eventRule: {
       mode: eventMode,
@@ -69,7 +72,7 @@ export default function Home() {
       endHour,
       smpThresholdWonPerKwh: smpThreshold,
     },
-  }), [analysisYear, customerCode, customerCount, participation, discount, shiftRate, scenario, weekendPriority, eventMode, startHour, endHour, smpThreshold]);
+  }), [analysisYear, customerCode, customerCount, participation, discount, shiftRate, scenario, selectedAppliances, weekendPriority, eventMode, startHour, endHour, smpThreshold]);
 
   const maxProfile = Math.max(...result.baseLoadProfile, ...result.shiftedLoadProfile) * 1.08;
   const averageEventHours = result.eventDays ? result.eventHours / result.eventDays : 0;
@@ -113,8 +116,20 @@ export default function Home() {
   const reset = () => {
     setAnalysisYear(2025); setCustomerType("주택용 TOU"); setCustomerCount(1200);
     setParticipation(80); setDiscount(50); setShiftRate(50); setScenario("aggregate");
+    setSelectedAppliances([...ALL_APPLIANCE_CODES]);
     setWeekendPriority(true); setEventMode("ACTUAL"); setSmpThreshold(0);
     setStartHour(10); setEndHour(16);
+  };
+
+  const changeCustomerType = (value: CustomerType) => {
+    setCustomerType(value);
+    if (value !== "주택용 TOU") setScenario("aggregate");
+  };
+
+  const toggleAppliance = (code: ApplianceCode) => {
+    setSelectedAppliances((current) => current.includes(code)
+      ? current.filter((item) => item !== code)
+      : [...current, code]);
   };
 
   return (
@@ -142,7 +157,7 @@ export default function Home() {
           <div className="section-heading"><div><p>01 · INPUT</p><h2>분석 조건</h2></div><button className="text-button" onClick={reset}>기본값으로 초기화</button></div>
           <div className="settings-grid">
             <label className="control-field"><FieldLabel>분석연도</FieldLabel><select value={analysisYear} onChange={(event) => setAnalysisYear(Number(event.target.value) as AnalysisYear)}><option value={2024}>2024</option><option value={2025}>2025</option><option value={2026}>2026 YTD</option></select></label>
-            <label className="control-field"><FieldLabel>고객 유형</FieldLabel><select value={customerType} onChange={(event) => setCustomerType(event.target.value as CustomerType)}><option>주택용 TOU</option><option>전기차 완속 저압</option><option>전기차 급속·고압</option></select></label>
+            <label className="control-field"><FieldLabel>고객 유형</FieldLabel><select value={customerType} onChange={(event) => changeCustomerType(event.target.value as CustomerType)}><option>주택용 TOU</option><option>전기차 완속 저압</option><option>전기차 급속·고압</option></select></label>
             <label className="control-field"><FieldLabel hint="호">대상 고객 수</FieldLabel><input type="number" min="1" value={customerCount} onChange={(event) => setCustomerCount(Math.max(1, Number(event.target.value) || 1))} /></label>
             <label className="control-field"><FieldLabel hint="월">기준 사용량</FieldLabel><div className="unit-input"><input value={monthlyUsage} readOnly /><span>kWh</span></div></label>
             <label className="control-field range-field"><FieldLabel hint={`${participation}%`}>제도 참여율</FieldLabel><input type="range" min="0" max="100" step="5" value={participation} onChange={(event) => setParticipation(Number(event.target.value))} /></label>
@@ -164,8 +179,8 @@ export default function Home() {
           <div className="section-heading"><div><p>02 · SCENARIO</p><h2>부하이전 시나리오</h2></div><span className="scenario-badge">실시간 계산</span></div>
           <div className="scenario-layout">
             <div className="scenario-options">
-              <button className={`scenario-option ${scenario === "aggregate" ? "selected" : ""}`} onClick={() => setScenario("aggregate")}><span className="radio-dot" /><span><strong>시나리오 1 · 전체부하 이전</strong><small>엑셀 시나리오 기준으로 최대부하 또는 충전부하를 발령시간대로 이전</small></span></button>
-              <button className={`scenario-option ${scenario === "smart" ? "selected" : ""}`} onClick={() => setScenario("smart")}><span className="radio-dot" /><span><strong>시나리오 2 · 선택부하 이전</strong><small>이전 가능량 70%·kWh당 편익 15% 향상 가정으로 선택부하를 우선 이전</small></span></button>
+              <button className={`scenario-option ${scenario === "aggregate" ? "selected" : ""}`} onClick={() => setScenario("aggregate")}><span className="radio-dot" /><span><strong>시나리오 1 · 일괄 부하이전</strong><small>{customerType === "주택용 TOU" ? "13개 이전 가능 가전을 모두 포함해 동일한 이전율 적용" : "충전 집중시간의 사용량에 이전율을 일괄 적용"}</small></span></button>
+              <button disabled={customerType !== "주택용 TOU"} className={`scenario-option ${scenario === "smart" ? "selected" : ""}`} onClick={() => setScenario("smart")}><span className="radio-dot" /><span><strong>시나리오 2 · 가전 선택형 이전</strong><small>{customerType === "주택용 TOU" ? "체크한 가전의 엑셀상 이전 가능 전력량에만 이전율 적용" : "주택용 TOU 고객에서만 가전별 선택 가능"}</small></span></button>
             </div>
             <div className="shift-control">
               <div className="shift-value"><span>부하이전율</span><strong>{shiftRate}<small>%</small></strong></div>
@@ -174,6 +189,22 @@ export default function Home() {
               <div className="route-row"><div><span>이전 출발</span><strong>{customerType.includes("전기차") ? "충전 집중시간" : "최대부하"}</strong></div><span className="route-arrow">→</span><div><span>이전 도착</span><strong>발령시간</strong></div></div>
             </div>
           </div>
+          {scenario === "smart" && customerType === "주택용 TOU" ? <div className="appliance-selector">
+            <div className="appliance-selector-head">
+              <div><p>이전 대상 주요 가전</p><strong>{result.selectedApplianceCount}/{result.selectableApplianceCount}개 선택 · 이전 가능량 {Math.round(result.selectedApplianceShare * 100)}%</strong></div>
+              <div><button type="button" onClick={() => setSelectedAppliances([...ALL_APPLIANCE_CODES])}>전체 선택</button><button type="button" onClick={() => setSelectedAppliances([])}>전체 해제</button></div>
+            </div>
+            <div className="appliance-grid">
+              {SELECTABLE_APPLIANCES.map((appliance) => {
+                const share = getApplianceShare(appliance.code, analysisYear) * 100;
+                return <label className={`appliance-check ${selectedAppliances.includes(appliance.code) ? "checked" : ""}`} key={appliance.code}>
+                  <input type="checkbox" checked={selectedAppliances.includes(appliance.code)} onChange={() => toggleAppliance(appliance.code)} />
+                  <span><strong>{appliance.label}</strong><small>{appliance.category} · {share > 0 ? `이전비중 ${share.toFixed(1)}%` : "해당 연도 이전량 없음"}</small></span>
+                </label>;
+              })}
+            </div>
+            <p className="appliance-note">가전별 비중은 {yearLabel} 실제 발령일의 계절·주중·주말 부하곡선에서 10–16시 밖의 이전 가능 사용량을 기준으로 산정합니다. 모든 가전을 선택하면 시나리오 1과 동일합니다.</p>
+          </div> : null}
         </section>
 
         <section className="metric-grid" aria-label="분석 핵심 지표">
