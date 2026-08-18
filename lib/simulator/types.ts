@@ -2,10 +2,15 @@ export type AnalysisYear = 2024 | 2025 | 2026;
 
 export type CustomerTypeCode =
   | "RESIDENTIAL_TOU"
+  | "EV_TOTAL"
   | "EV_SLOW_LOW_VOLTAGE"
   | "EV_FAST_HIGH_VOLTAGE";
 
-export type LoadShiftMode = "AGGREGATE" | "SELECTIVE";
+export type LoadShiftMode =
+  | "SCENARIO_1"
+  | "RES_SCENARIO_2"
+  | "EV_SCENARIO_2_1"
+  | "EV_SCENARIO_2_2";
 export type EventMode = "ACTUAL" | "RULE";
 export type ApplianceCode =
   | "MOBILE_IT"

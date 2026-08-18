@@ -1,14 +1,16 @@
 import type {
   AnalysisYear,
   CustomerTypeCode,
+  LoadShiftMode,
   SimulationInput,
   SimulationResult,
 } from "./types";
 import { getSelectedApplianceShare, SELECTABLE_APPLIANCES } from "./appliances";
 
-export const ENGINE_VERSION = "1.1.0-appliance-selection";
+export const ENGINE_VERSION = "1.2.0-scenario-models";
 
 type Point = readonly [shiftPercent: number, benefitWon: number];
+type BaseCustomerType = Exclude<CustomerTypeCode, "EV_TOTAL">;
 
 const RESIDENTIAL_2025: readonly Point[] = [
   [0, 10142.423877833862], [10, 11881.963841524426],
@@ -21,12 +23,18 @@ const RESIDENTIAL_2024: readonly Point[] = [
   [80, 11027.148012095131], [100, 12751.484358143862],
 ];
 
+const EV_SLOW_USAGE = 1949025.8806533858;
+const EV_FAST_USAGE = 576504.6120000001;
+export const EV_TOTAL_SLOW_WEIGHT = EV_SLOW_USAGE / (EV_SLOW_USAGE + EV_FAST_USAGE);
+export const EV_TOTAL_FAST_WEIGHT = 1 - EV_TOTAL_SLOW_WEIGHT;
+
 const CALIBRATION = {
   RESIDENTIAL_TOU: {
     currentAnnualCharge: 1092522.2452596456,
     gross2025: RESIDENTIAL_2025,
     priority2025: RESIDENTIAL_2025,
-    movedKwhAt100: 163.22,
+    preciseMovedKwhAt100: 163.22,
+    scenarioOneMovedKwhAt100: 129.81,
     sourceRate: 188.72,
     destinationRate: 164.28,
     baseProfile: [42,39,36,34,33,35,40,48,61,53,49,48,47,46,47,49,58,72,86,92,90,82,69,55],
@@ -35,7 +43,8 @@ const CALIBRATION = {
     currentAnnualCharge: 491772.6626142673,
     gross2025: [[0,10318.87949721437],[50,21080.949078926315],[100,31843.018660638278]] as readonly Point[],
     priority2025: [[0,8741.66865394899],[50,15900.19903571237],[100,23058.72941747577]] as readonly Point[],
-    movedKwhAt100: 624.2,
+    preciseMovedKwhAt100: 624.2,
+    scenarioOneMovedKwhAt100: 236.42,
     sourceRate: 92.86,
     destinationRate: 116.77,
     baseProfile: [98,87,71,56,41,29,21,18,18,19,19,18,18,18,18,19,21,26,33,39,45,52,85,100],
@@ -44,7 +53,8 @@ const CALIBRATION = {
     currentAnnualCharge: 584640.2439547501,
     gross2025: [[0,20954.52198632108],[50,24542.52499331522],[100,28130.52800030937]] as readonly Point[],
     priority2025: [[0,15237.315689055282],[50,18422.322531052858],[100,21607.329373050445]] as readonly Point[],
-    movedKwhAt100: 210.8,
+    preciseMovedKwhAt100: 210.8,
+    scenarioOneMovedKwhAt100: 437.55,
     sourceRate: 85.76,
     destinationRate: 103.45,
     baseProfile: [86,82,76,67,55,43,35,31,34,43,53,62,69,73,76,78,80,83,87,91,95,98,96,91],
@@ -68,7 +78,7 @@ function interpolate(points: readonly Point[], shiftRate: number): number {
 }
 
 function benefitAtHalfDiscount(
-  customerType: CustomerTypeCode,
+  customerType: BaseCustomerType,
   year: AnalysisYear,
   shiftRate: number,
   weekendPriority: boolean,
@@ -79,8 +89,7 @@ function benefitAtHalfDiscount(
   const shifted2025 = interpolate(points, shiftRate);
 
   if (customerType === "RESIDENTIAL_TOU" && year === 2024) {
-    const base = interpolate(RESIDENTIAL_2024, 0);
-    return { base, shifted: interpolate(RESIDENTIAL_2024, shiftRate) };
+    return { base: interpolate(RESIDENTIAL_2024, 0), shifted: interpolate(RESIDENTIAL_2024, shiftRate) };
   }
   if (year === 2025) return { base: base2025, shifted: shifted2025 };
   if (year === 2026) return { base: base2025 * (100 / 150), shifted: shifted2025 * (100 / 150) };
@@ -109,13 +118,87 @@ function eventSelection(input: SimulationInput) {
   };
 }
 
-function shiftedProfile(customerType: CustomerTypeCode, effectiveShiftRate: number) {
-  const base = [...CALIBRATION[customerType].baseProfile];
+function getComponents(customerType: CustomerTypeCode): Array<{ type: BaseCustomerType; weight: number }> {
+  if (customerType === "EV_TOTAL") {
+    return [
+      { type: "EV_SLOW_LOW_VOLTAGE", weight: EV_TOTAL_SLOW_WEIGHT },
+      { type: "EV_FAST_HIGH_VOLTAGE", weight: EV_TOTAL_FAST_WEIGHT },
+    ];
+  }
+  return [{ type: customerType, weight: 1 }];
+}
+
+function componentShiftRate(type: BaseCustomerType, mode: LoadShiftMode, requestedRate: number) {
+  if (mode === "EV_SCENARIO_2_1" && type !== "EV_FAST_HIGH_VOLTAGE") return 0;
+  if (mode === "EV_SCENARIO_2_2" && type !== "EV_SLOW_LOW_VOLTAGE") return 0;
+  return requestedRate;
+}
+
+function componentResult(
+  type: BaseCustomerType,
+  input: SimulationInput,
+  effectiveShiftRate: number,
+  eventScale: number,
+) {
+  const calibration = CALIBRATION[type];
+  const halfBase = benefitAtHalfDiscount(type, input.analysisYear, 0, input.weekendDiscountPriority).base;
+  const halfSavingPerKwh = calibration.sourceRate - calibration.destinationRate * 0.5;
+  const selectedSavingPerKwh = calibration.sourceRate - calibration.destinationRate * (1 - input.discountRate);
+  const discountOnlyBenefit = halfBase * (input.discountRate / 0.5);
+  const yearMovementScale = EVENT_DATA[input.analysisYear].hours / 150;
+
+  if (input.shiftMode === "SCENARIO_1") {
+    const movedKwh = calibration.scenarioOneMovedKwhAt100 * yearMovementScale * effectiveShiftRate * eventScale;
+    return {
+      benefit: (discountOnlyBenefit * eventScale) + movedKwh * selectedSavingPerKwh,
+      movedKwh,
+    };
+  }
+
+  const half = benefitAtHalfDiscount(type, input.analysisYear, effectiveShiftRate, input.weekendDiscountPriority);
+  const halfIncrement = half.shifted - half.base;
+  const shiftBenefit = halfSavingPerKwh === 0 ? 0 : halfIncrement * (selectedSavingPerKwh / halfSavingPerKwh);
+  return {
+    benefit: (discountOnlyBenefit + shiftBenefit) * eventScale,
+    movedKwh: calibration.preciseMovedKwhAt100 * effectiveShiftRate * yearMovementScale * eventScale,
+  };
+}
+
+function baseProfile(customerType: CustomerTypeCode) {
+  const components = getComponents(customerType);
+  return Array.from({ length: 24 }, (_, hour) => components.reduce(
+    (sum, component) => sum + CALIBRATION[component.type].baseProfile[hour] * component.weight,
+    0,
+  ));
+}
+
+function shiftedProfile(customerType: CustomerTypeCode, mode: LoadShiftMode, effectiveShiftRate: number) {
+  const base = baseProfile(customerType);
   const shifted = [...base];
-  const sourceHours = customerType === "RESIDENTIAL_TOU" ? [17,18,19,20,21] : [0,1,2,22,23];
-  const destinationHours = [9,10,11,12,13,14,15];
-  const removable = sourceHours.reduce((sum, hour) => sum + base[hour] * 0.22 * effectiveShiftRate, 0);
-  sourceHours.forEach((hour) => { shifted[hour] -= base[hour] * 0.22 * effectiveShiftRate; });
+  let sourceHours: number[];
+  let destinationHours: number[];
+  if (mode === "EV_SCENARIO_2_1") {
+    sourceHours = [17];
+    destinationHours = [10];
+  } else if (mode === "EV_SCENARIO_2_2") {
+    sourceHours = [23, 0, 1];
+    destinationHours = [10, 11, 12];
+  } else if (mode === "RES_SCENARIO_2") {
+    sourceHours = [17, 18, 19, 20, 21];
+    destinationHours = [10, 11, 12, 13, 14, 15];
+  } else {
+    sourceHours = [16, 17, 18, 19, 20, 21];
+    destinationHours = [10, 11, 12, 13, 14, 15];
+  }
+
+  const routeWeight = customerType === "EV_TOTAL" && mode === "EV_SCENARIO_2_1"
+    ? EV_TOTAL_FAST_WEIGHT
+    : customerType === "EV_TOTAL" && mode === "EV_SCENARIO_2_2"
+      ? EV_TOTAL_SLOW_WEIGHT
+      : 1;
+  const fraction = Math.min(1, 0.24 * effectiveShiftRate * routeWeight);
+  const removable = sourceHours.reduce((sum, hour) => sum + base[hour] * fraction, 0);
+  sourceHours.forEach((hour) => { shifted[hour] -= base[hour] * fraction; });
   destinationHours.forEach((hour) => { shifted[hour] += removable / destinationHours.length; });
   return { base, shifted };
 }
@@ -132,37 +215,38 @@ export function validateSimulationInput(input: SimulationInput): string[] {
 
 export function runSimulation(input: SimulationInput): SimulationResult {
   const warnings = validateSimulationInput(input);
-  const calibration = CALIBRATION[input.customerType];
   const event = eventSelection(input);
   const participatingCustomers = Math.round(input.customerCount * input.participationRate);
-  const selective = input.shiftMode === "SELECTIVE";
-  const selectedApplianceShare = selective && input.customerType === "RESIDENTIAL_TOU"
+  const applianceScenario = input.shiftMode === "RES_SCENARIO_2" && input.customerType === "RESIDENTIAL_TOU";
+  const selectedApplianceShare = applianceScenario
     ? getSelectedApplianceShare(input.selectedAppliances, input.analysisYear)
     : 1;
   const selectedCodes = new Set(input.selectedAppliances);
   const selectedApplianceCount = SELECTABLE_APPLIANCES.filter(({ code }) => selectedCodes.has(code)).length;
-  const effectiveShiftRate = input.shiftRate * selectedApplianceShare;
-  const half = benefitAtHalfDiscount(input.customerType, input.analysisYear, effectiveShiftRate, input.weekendDiscountPriority);
-  const halfIncrement = half.shifted - half.base;
-  const halfSavingPerKwh = calibration.sourceRate - calibration.destinationRate * 0.5;
-  const selectedSavingPerKwh = calibration.sourceRate - calibration.destinationRate * (1 - input.discountRate);
-  const discountOnlyBenefit = half.base * (input.discountRate / 0.5);
-  const shiftBenefit = halfSavingPerKwh === 0 ? 0 : halfIncrement * (selectedSavingPerKwh / halfSavingPerKwh);
-  const benefitPerCustomer = (discountOnlyBenefit + shiftBenefit) * event.scale;
+  const requestedShiftRate = input.shiftRate * selectedApplianceShare;
+  const components = getComponents(input.customerType);
 
-  const basis = EVENT_DATA[input.analysisYear];
-  const shiftedKwhPerCustomer = calibration.movedKwhAt100 * effectiveShiftRate * (basis.hours / 150) * event.scale;
+  let benefitPerCustomer = 0;
+  let shiftedKwhPerCustomer = 0;
+  let currentBill = 0;
+  components.forEach(({ type, weight }) => {
+    const effectiveRate = componentShiftRate(type, input.shiftMode, requestedShiftRate);
+    const result = componentResult(type, input, effectiveRate, event.scale);
+    benefitPerCustomer += result.benefit * weight;
+    shiftedKwhPerCustomer += result.movedKwh * weight;
+    currentBill += CALIBRATION[type].currentAnnualCharge * EVENT_DATA[input.analysisYear].period * weight;
+  });
+
   const shiftedEnergyMwh = shiftedKwhPerCustomer * participatingCustomers / 1000;
   const totalBenefit = benefitPerCustomer * participatingCustomers;
-  const currentBill = calibration.currentAnnualCharge * basis.period;
   const currentSales = currentBill * participatingCustomers;
   const salesChange = -totalBenefit;
   const smpCostChange = -(shiftedEnergyMwh * 1000 * 130);
-  const profiles = shiftedProfile(input.customerType, effectiveShiftRate);
+  const profiles = shiftedProfile(input.customerType, input.shiftMode, requestedShiftRate);
 
-  if (selective && input.customerType === "RESIDENTIAL_TOU" && selectedApplianceCount === 0) warnings.push("선택된 가전이 없어 부하이전량은 0으로 계산했습니다.");
+  if (applianceScenario && selectedApplianceCount === 0) warnings.push("선택된 가전이 없어 부하이전량은 0으로 계산했습니다.");
   if (input.customerType === "RESIDENTIAL_TOU" && !input.weekendDiscountPriority) warnings.push("주택용 주말 중복처리 해제 효과는 엑셀에 별도 기준점이 없어 현 기준점과 동일하게 처리했습니다.");
-  if (input.analysisYear !== 2025 && input.customerType !== "RESIDENTIAL_TOU") warnings.push("EV의 2024·2026 값은 2025 EV 기준점에 해당 연도 발령실적 보정계수를 적용했습니다.");
+  if (input.analysisYear !== 2025 && input.customerType !== "RESIDENTIAL_TOU") warnings.push("EV의 2024·2026 값은 2025 EV 기준점에 해당 연도 발령시간 보정계수를 적용했습니다.");
   if (input.eventRule.mode === "RULE") warnings.push("SMP 자동판정은 업로드 자료에 포함된 비양(0원) 발령 후보일 내에서 재산정합니다.");
 
   return {

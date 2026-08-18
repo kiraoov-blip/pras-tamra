@@ -15,7 +15,7 @@ export const DEFAULT_SIMULATION_INPUT: SimulationInput = {
   participationRate: 0.8,
   discountRate: 0.5,
   shiftRate: 0.5,
-  shiftMode: "AGGREGATE",
+  shiftMode: "SCENARIO_1",
   selectedAppliances: [...ALL_APPLIANCE_CODES],
   weekendDiscountPriority: true,
   eventRule: DEFAULT_EVENT_RULE,
@@ -23,6 +23,7 @@ export const DEFAULT_SIMULATION_INPUT: SimulationInput = {
 
 export const REFERENCE_MONTHLY_USAGE_KWH = {
   RESIDENTIAL_TOU: 584,
+  EV_TOTAL: 351,
   EV_SLOW_LOW_VOLTAGE: 336,
   EV_FAST_HIGH_VOLTAGE: 400,
 } as const;
