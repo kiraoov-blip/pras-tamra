@@ -78,26 +78,21 @@ export default function Home() {
 
   return (
     <main>
-      <header className="topbar">
-        <div className="page-shell topbar-inner">
-          <div className="brand"><span className="brand-mark">P</span><div><strong>PRAS</strong><span>Power Rate Analysis Simulator</span></div></div>
-          <div className="topbar-meta"><span className="version-pill"><StatusDot tone="green" /> UI 골격 v0.1</span><span className="data-pill">기준자료 2025</span></div>
-        </div>
-      </header>
-
-      <section className="hero">
+      <header className="hero">
         <div className="page-shell hero-grid">
-          <div>
-            <p className="hero-kicker">PRAS - TAMRA ELECTRICITY FORECAST</p>
-            <h1>탐라는 전기예보제<br />요금·편익 분석 시뮬레이터</h1>
-            <p className="hero-description">태양광 발전량이 많은 시간대의 요금할인이 고객의 전기요금과 한전의 판매수익·전력구입비에 미치는 영향을 분석합니다.</p>
+          <div className="hero-title">
+            <span className="brand-mark" aria-hidden="true">P</span>
+            <div>
+              <h1>탐라는 전기예보제 요금·편익 분석 시뮬레이터</h1>
+              <p>PRAS - TAMRA</p>
+            </div>
           </div>
           <div className="hero-summary" aria-label="기본 분석 조건 요약">
             <div><span>발령기준</span><strong>제주 SMP ≤ 0원</strong></div><div><span>대상시간</span><strong>10시–16시</strong></div>
             <div><span>2025 실적</span><strong>56일 · 150시간</strong></div><div><span>기본 할인율</span><strong>50%</strong></div>
           </div>
         </div>
-      </section>
+      </header>
 
       <div className="page-shell workspace">
         <section className="section-card settings-card">

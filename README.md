@@ -60,6 +60,8 @@ GITHUB_PAGES=true npm run build:github-pages
 
 저장소 이름이 달라져도 배포 작업이 해당 이름을 자동으로 경로에 반영합니다.
 
+> 중요: `Deploy from a branch`를 선택하면 시뮬레이터가 아니라 이 README 문서가 웹페이지로 표시될 수 있습니다. 반드시 `GitHub Actions`를 선택합니다.
+
 ## 계산엔진 연결 순서
 
 1. 시간별 SMP와 발령조건으로 이벤트 마스크 생성
