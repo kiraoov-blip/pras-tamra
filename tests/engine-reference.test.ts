@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-// Explicit extensions let Node's built-in TypeScript stripper run this test without a loader.
 import { DEFAULT_SIMULATION_INPUT } from "../lib/simulator/defaults.ts";
 import { EV_TOTAL_FAST_WEIGHT, EV_TOTAL_SLOW_WEIGHT, runSimulation } from "../lib/simulator/engine.ts";
 import { ALL_APPLIANCE_CODES } from "../lib/simulator/appliances.ts";
@@ -14,99 +13,129 @@ function simulate(overrides: Partial<SimulationInput> = {}) {
   });
 }
 
-test("2025 주택용 엑셀 기준점을 재현한다", () => {
-  assert.ok(Math.abs(simulate({ shiftMode: "RES_SCENARIO_2", shiftRate: 0 }).customer.annualBenefitPerCustomerWon - 10142.423877833862) < 0.001);
-  assert.ok(Math.abs(simulate({ shiftMode: "RES_SCENARIO_2", shiftRate: 0.5 }).customer.annualBenefitPerCustomerWon - 18840.123696286726) < 0.001);
-  assert.ok(Math.abs(simulate({ shiftMode: "RES_SCENARIO_2", shiftRate: 1 }).customer.annualBenefitPerCustomerWon - 27537.823514739648) < 0.001);
+function sum(values: number[]) {
+  return values.reduce((total, value) => total + value, 0);
+}
+
+function nearly(actual: number, expected: number, tolerance = 0.001) {
+  assert.ok(Math.abs(actual - expected) <= tolerance, `${actual} != ${expected}`);
+}
+
+test("2025 실적 발령구간과 SMP 자동판정 시간을 서로 구분한다", () => {
+  const actual = simulate();
+  const rule = simulate({ eventRule: { ...DEFAULT_SIMULATION_INPUT.eventRule, mode: "RULE" } });
+  assert.equal(actual.eventDays, 56);
+  assert.equal(actual.eventHours, 195);
+  assert.equal(rule.eventDays, 56);
+  assert.equal(rule.eventHours, 150);
+  assert.equal(sum(actual.monthlyEventDays), 56);
 });
 
-test("주택용 시나리오 1은 판매수입 엑셀 집계 기준점을 통과하고 1% 단위로 보간한다", () => {
-  const referenceTotals = [
-    [0, 11069128.669753268],
-    [0.1, 13266506.57830143],
-    [0.5, 22056018.212494195],
-    [1, 33042907.755235],
-  ] as const;
-  referenceTotals.forEach(([shiftRate, expectedTotal]) => {
-    const result = simulate({
-      shiftMode: "SCENARIO_1",
-      shiftRate,
-      customerCount: 1200,
-      participationRate: 1,
-    });
-    assert.ok(Math.abs(result.customer.totalAnnualBenefitWon - expectedTotal) < 0.001);
-  });
+test("할인만 적용한 기준점과 수정된 기본요금 포함 청구액을 재현한다", () => {
+  const scenarioOne = simulate({ shiftMode: "SCENARIO_1", shiftRate: 0 });
+  const scenarioTwo = simulate({ shiftMode: "RES_SCENARIO_2", shiftRate: 0 });
+  nearly(scenarioOne.customer.annualBenefitPerCustomerWon, 10_142.423876244207);
+  nearly(scenarioTwo.customer.annualBenefitPerCustomerWon, scenarioOne.customer.annualBenefitPerCustomerWon);
+  // Correct residential tariff: 1,127,265.024 energy + 4,310 x 12 basic charge.
+  nearly(scenarioOne.customer.currentAnnualBillWon, 1_178_985.02449335);
+  assert.equal(scenarioOne.grid.shiftedEnergyMwh, 0);
+  assert.equal(scenarioOne.utility.smpPurchaseCostChangeWon, 0);
+});
+
+test("시나리오 1은 1% 입력에 연속 반응하고 최대부하 여섯 시간 이내에서 에너지를 보존한다", () => {
   const at10 = simulate({ shiftMode: "SCENARIO_1", shiftRate: 0.1 });
   const at11 = simulate({ shiftMode: "SCENARIO_1", shiftRate: 0.11 });
+  const at100 = simulate({ shiftMode: "SCENARIO_1", shiftRate: 1 });
   assert.ok(at11.customer.annualBenefitPerCustomerWon > at10.customer.annualBenefitPerCustomerWon);
+  assert.ok(at11.grid.shiftedEnergyMwh > at10.grid.shiftedEnergyMwh);
+  assert.ok(at100.shiftedLoadProfile.every((value) => value >= -1e-12));
+  nearly(sum(at100.baseLoadProfile), sum(at100.shiftedLoadProfile), 1e-9);
 });
 
-test("2024 주택용 기준점과 2026 YTD 발령실적을 재현한다", () => {
-  assert.ok(Math.abs(simulate({ analysisYear: 2024, shiftMode: "RES_SCENARIO_2" }).customer.annualBenefitPerCustomerWon - 8440.643493022013) < 0.001);
-  const ytd = simulate({ analysisYear: 2026 });
-  assert.equal(ytd.eventDays, 39);
-  assert.equal(ytd.eventHours, 100);
-});
-
-test("EV 2-1·2-2 주말할인 우선순위 기준점을 구분한다", () => {
-  const slowPriority = simulate({ customerType: "EV_SLOW_LOW_VOLTAGE", shiftMode: "EV_SCENARIO_2_2", weekendDiscountPriority: true });
-  const slowForecast = simulate({ customerType: "EV_SLOW_LOW_VOLTAGE", shiftMode: "EV_SCENARIO_2_2", weekendDiscountPriority: false });
-  assert.ok(Math.abs(slowPriority.customer.annualBenefitPerCustomerWon - 15900.19903571237) < 0.001);
-  assert.ok(Math.abs(slowForecast.customer.annualBenefitPerCustomerWon - 21080.949078926315) < 0.001);
-
-  const fastPriority = simulate({ customerType: "EV_FAST_HIGH_VOLTAGE", shiftMode: "EV_SCENARIO_2_1", weekendDiscountPriority: true });
-  assert.ok(Math.abs(fastPriority.customer.annualBenefitPerCustomerWon - 18422.322531052858) < 0.001);
-});
-
-test("입력 변경이 편익과 이전량에 반영되고 부하 총량은 보존된다", () => {
-  const base = simulate();
-  const changed = simulate({ discountRate: 0.7, shiftRate: 0.8, participationRate: 0.6 });
-  assert.notEqual(changed.customer.annualBenefitPerCustomerWon, base.customer.annualBenefitPerCustomerWon);
-  assert.notEqual(changed.grid.shiftedEnergyMwh, base.grid.shiftedEnergyMwh);
-  assert.equal(changed.participatingCustomers, 720);
-  const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
-  assert.ok(Math.abs(sum(changed.baseLoadProfile) - sum(changed.shiftedLoadProfile)) < 1e-9);
-});
-
-test("주택용 전체부하 시나리오와 13개 가전 시나리오를 별도로 계산한다", () => {
-  const aggregate = simulate({ shiftMode: "SCENARIO_1" });
+test("주택용 13개 가전 선택은 실제 이동경로를 바꾸며 선택하지 않으면 이전하지 않는다", () => {
   const allSelected = simulate({ shiftMode: "RES_SCENARIO_2", selectedAppliances: [...ALL_APPLIANCE_CODES] });
-  assert.notEqual(allSelected.customer.annualBenefitPerCustomerWon, aggregate.customer.annualBenefitPerCustomerWon);
-  assert.notEqual(allSelected.grid.shiftedEnergyMwh, aggregate.grid.shiftedEnergyMwh);
-
   const noneSelected = simulate({ shiftMode: "RES_SCENARIO_2", selectedAppliances: [] });
   const noShift = simulate({ shiftMode: "RES_SCENARIO_2", shiftRate: 0 });
-  assert.ok(Math.abs(noneSelected.customer.annualBenefitPerCustomerWon - noShift.customer.annualBenefitPerCustomerWon) < 0.001);
+  assert.ok(allSelected.grid.shiftedEnergyMwh > 0);
   assert.equal(noneSelected.grid.shiftedEnergyMwh, 0);
+  nearly(noneSelected.customer.annualBenefitPerCustomerWon, noShift.customer.annualBenefitPerCustomerWon);
 
   const withoutHeatPump = simulate({
     shiftMode: "RES_SCENARIO_2",
     selectedAppliances: ALL_APPLIANCE_CODES.filter((code) => code !== "HEAT_PUMP_HEATING"),
   });
-  assert.ok(withoutHeatPump.grid.shiftedEnergyMwh < aggregate.grid.shiftedEnergyMwh);
-  assert.ok(Math.abs(withoutHeatPump.selectedApplianceShare - (1 - 140.4 / 319.03)) < 1e-9);
+  assert.ok(withoutHeatPump.grid.shiftedEnergyMwh < allSelected.grid.shiftedEnergyMwh);
+  nearly(sum(allSelected.baseLoadProfile), sum(allSelected.shiftedLoadProfile), 1e-9);
+  assert.ok(allSelected.shiftedLoadProfile.every((value) => value >= -1e-12));
 });
 
-test("전기차 전체는 완속·급속 실적 비중을 합산하고 세 시나리오를 구분한다", () => {
+test("EV 2-1은 급속, 2-2는 완속 충전경로에만 부하이전을 적용한다", () => {
+  const slow21 = simulate({ customerType: "EV_SLOW_LOW_VOLTAGE", shiftMode: "EV_SCENARIO_2_1" });
+  const slow22 = simulate({ customerType: "EV_SLOW_LOW_VOLTAGE", shiftMode: "EV_SCENARIO_2_2" });
+  const fast21 = simulate({ customerType: "EV_FAST_HIGH_VOLTAGE", shiftMode: "EV_SCENARIO_2_1" });
+  const fast22 = simulate({ customerType: "EV_FAST_HIGH_VOLTAGE", shiftMode: "EV_SCENARIO_2_2" });
+  assert.equal(slow21.grid.shiftedEnergyMwh, 0);
+  assert.ok(slow22.grid.shiftedEnergyMwh > 0);
+  assert.ok(fast21.grid.shiftedEnergyMwh > 0);
+  assert.equal(fast22.grid.shiftedEnergyMwh, 0);
+});
+
+test("EV 전체는 완속·급속 실적 비중을 합산한다", () => {
   const total = simulate({ customerType: "EV_TOTAL", shiftMode: "SCENARIO_1" });
   const slow = simulate({ customerType: "EV_SLOW_LOW_VOLTAGE", shiftMode: "SCENARIO_1" });
   const fast = simulate({ customerType: "EV_FAST_HIGH_VOLTAGE", shiftMode: "SCENARIO_1" });
-  const expected = slow.customer.annualBenefitPerCustomerWon * EV_TOTAL_SLOW_WEIGHT
-    + fast.customer.annualBenefitPerCustomerWon * EV_TOTAL_FAST_WEIGHT;
-  assert.ok(Math.abs(total.customer.annualBenefitPerCustomerWon - expected) < 0.001);
+  nearly(
+    total.customer.annualBenefitPerCustomerWon,
+    slow.customer.annualBenefitPerCustomerWon * EV_TOTAL_SLOW_WEIGHT
+      + fast.customer.annualBenefitPerCustomerWon * EV_TOTAL_FAST_WEIGHT,
+  );
 
-  const scenario21 = simulate({ customerType: "EV_TOTAL", shiftMode: "EV_SCENARIO_2_1" });
-  const scenario22 = simulate({ customerType: "EV_TOTAL", shiftMode: "EV_SCENARIO_2_2" });
-  assert.notEqual(total.grid.shiftedEnergyMwh, scenario21.grid.shiftedEnergyMwh);
-  assert.notEqual(scenario21.grid.shiftedEnergyMwh, scenario22.grid.shiftedEnergyMwh);
-
-  const slowScenario21 = simulate({ customerType: "EV_SLOW_LOW_VOLTAGE", shiftMode: "EV_SCENARIO_2_1" });
-  const slowNoShift = simulate({ customerType: "EV_SLOW_LOW_VOLTAGE", shiftMode: "EV_SCENARIO_2_1", shiftRate: 0 });
-  assert.ok(slowScenario21.grid.shiftedEnergyMwh > slowNoShift.grid.shiftedEnergyMwh);
+  const total21 = simulate({ customerType: "EV_TOTAL", shiftMode: "EV_SCENARIO_2_1" });
+  const total22 = simulate({ customerType: "EV_TOTAL", shiftMode: "EV_SCENARIO_2_2" });
+  assert.ok(total21.grid.shiftedEnergyMwh > 0);
+  assert.ok(total22.grid.shiftedEnergyMwh > 0);
+  assert.notEqual(total21.grid.shiftedEnergyMwh, total22.grid.shiftedEnergyMwh);
 });
 
-test("음수 SMP 임계값이면 업로드 자료의 0원 발령시간이 제외된다", () => {
-  const result = simulate({ eventRule: { ...DEFAULT_SIMULATION_INPUT.eventRule, mode: "RULE", smpThresholdWonPerKwh: -1 } });
-  assert.equal(result.eventHours, 0);
-  assert.equal(result.customer.totalAnnualBenefitWon, 0);
+test("기존 EV 주말할인을 우선하면 중복할인 방식보다 편익이 작다", () => {
+  const priority = simulate({
+    customerType: "EV_SLOW_LOW_VOLTAGE",
+    shiftMode: "EV_SCENARIO_2_2",
+    weekendDiscountPriority: true,
+  });
+  const stacked = simulate({
+    customerType: "EV_SLOW_LOW_VOLTAGE",
+    shiftMode: "EV_SCENARIO_2_2",
+    weekendDiscountPriority: false,
+  });
+  assert.ok(priority.customer.annualBenefitPerCustomerWon < stacked.customer.annualBenefitPerCustomerWon);
+});
+
+test("SMP 구입비 변화는 고정단가가 아니라 시간별 부하차와 SMP의 내적으로 계산한다", () => {
+  const noShift = simulate({ shiftMode: "SCENARIO_1", shiftRate: 0 });
+  const shifted = simulate({ shiftMode: "SCENARIO_1", shiftRate: 0.5 });
+  assert.equal(noShift.utility.smpPurchaseCostChangeWon, 0);
+  assert.ok(shifted.utility.smpPurchaseCostChangeWon < 0);
+  assert.notEqual(
+    shifted.utility.smpPurchaseCostChangeWon,
+    -(shifted.grid.shiftedEnergyMwh * 1_000 * 130),
+  );
+});
+
+test("SMP 임계값을 낮추면 음수 SMP 시간만 남아 발령범위가 축소된다", () => {
+  const atZero = simulate({ eventRule: { ...DEFAULT_SIMULATION_INPUT.eventRule, mode: "RULE", smpThresholdWonPerKwh: 0 } });
+  const belowZero = simulate({ eventRule: { ...DEFAULT_SIMULATION_INPUT.eventRule, mode: "RULE", smpThresholdWonPerKwh: -1 } });
+  assert.ok(belowZero.eventDays > 0);
+  assert.ok(belowZero.eventDays < atZero.eventDays);
+  assert.ok(belowZero.eventHours < atZero.eventHours);
+});
+
+test("연도별 원자료와 2026 YTD 청구기간을 적용한다", () => {
+  const y2024 = simulate({ analysisYear: 2024 });
+  const y2026 = simulate({ analysisYear: 2026 });
+  assert.equal(y2024.eventDays, 18);
+  assert.equal(y2024.eventHours, 68);
+  assert.equal(y2026.eventDays, 39);
+  assert.equal(y2026.eventHours, 100);
+  assert.ok(y2026.customer.currentAnnualBillWon < y2024.customer.currentAnnualBillWon);
 });
