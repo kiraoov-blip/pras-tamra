@@ -78,6 +78,8 @@ export interface SimulationResult {
   engineVersion: string;
   eventDays: number;
   eventHours: number;
+  /** EV 시나리오에서 충전일과 발령일이 겹치는 계산상 기대일수. */
+  evChargingEventDays: number;
   participatingCustomers: number;
   selectedApplianceCount: number;
   selectableApplianceCount: number;

@@ -6,7 +6,6 @@ import type {
   SimulationResult,
 } from "./types";
 import { SELECTABLE_APPLIANCES } from "./appliances";
-import { REFERENCE_MONTHLY_USAGE_KWH } from "./defaults";
 import {
   REFERENCE_DATA,
   type ReferenceDayType,
@@ -14,11 +13,17 @@ import {
   type ReferenceSeason,
 } from "./reference-data.generated";
 
-export const ENGINE_VERSION = "2.3.0-ev-unit-normalized";
+export const ENGINE_VERSION = "2.3.0-ev-scenario-rebuild";
 
 type BaseCustomerType = Exclude<CustomerTypeCode, "EV_TOTAL">;
 type Components = Array<{ type: BaseCustomerType; weight: number }>;
-type HourlyRoute = { base: number[]; shifted: number[]; movedKwh: number };
+type HourlyRoute = {
+  base: number[];
+  shifted: number[];
+  movedKwh: number;
+  /** 해당 발령일에 실제 충전이 존재할 확률. 2-1은 1, 2-2는 요일별 충전빈도를 적용한다. */
+  occurrenceWeight?: number;
+};
 type SelectedEvent = ReferenceEvent & { hours: number[] };
 type LoadProfileMap = Record<BaseCustomerType, Record<ReferenceSeason, readonly number[]>>;
 type ApplianceProfileMap = Record<string, Record<ApplianceCode, readonly number[]>>;
@@ -32,12 +37,6 @@ const EV_SLOW_USAGE = 1_949_025.8806533858;
 const EV_FAST_USAGE = 576_504.612;
 export const EV_TOTAL_SLOW_WEIGHT = EV_SLOW_USAGE / (EV_SLOW_USAGE + EV_FAST_USAGE);
 export const EV_TOTAL_FAST_WEIGHT = 1 - EV_TOTAL_SLOW_WEIGHT;
-
-const DAYS_PER_YEAR = 365;
-export const EV_TARGET_DAILY_USAGE_KWH = {
-  EV_SLOW_LOW_VOLTAGE: REFERENCE_MONTHLY_USAGE_KWH.EV_SLOW_LOW_VOLTAGE * 12 / DAYS_PER_YEAR,
-  EV_FAST_HIGH_VOLTAGE: REFERENCE_MONTHLY_USAGE_KWH.EV_FAST_HIGH_VOLTAGE * 12 / DAYS_PER_YEAR,
-} as const;
 
 const BASIC_CHARGE_MONTHLY_WON: Record<BaseCustomerType, number> = {
   RESIDENTIAL_TOU: 4_310,
@@ -57,6 +56,14 @@ const ENERGY_CHARGE_2025_WON: Record<BaseCustomerType, number> = {
 const APPLIANCE_TO_CUSTOMER_SCALE = 0.625;
 const CURTAILMENT_AVOIDANCE_FACTOR = 0.85;
 const PEAK_HOURS = [16, 17, 18, 19, 20, 21] as const;
+const EV_SLOW_CHARGE_HOURS = [23, 0, 1, 2, 3, 4] as const;
+const EV_FAST_REPRESENTATIVE_SOURCE_HOUR = 17;
+
+export const EV_CONTRACT_POWER_THRESHOLD_KW = 50;
+export const EV_REPRESENTATIVE_BASIS = {
+  slow: { contractPowerKw: 7, monthlyUsageKwh: 336, chargeHours: 6, sessionsPerMonth: 8 },
+  fast: { contractPowerKw: 50, monthlyUsageKwh: 400, chargeHours: 1, sessionsPerMonth: 8 },
+} as const;
 
 function repeated(value: number, count: number): number[] {
   return Array.from({ length: count }, () => value);
@@ -165,17 +172,7 @@ function componentsFor(customerType: CustomerTypeCode): Components {
 }
 
 function copyProfile(type: BaseCustomerType, season: ReferenceSeason): number[] {
-  const profile = [...LOAD_PROFILES[type][season]];
-  if (type === "RESIDENTIAL_TOU") return profile;
-
-  // The EV source sheets provide a 24-hour shape whose total is 42 kWh/day
-  // (slow) or 50 kWh/day (fast). Those totals conflict with the workbook's
-  // monthly representative usage of 336/400 kWh. Preserve the hourly shape,
-  // but normalize its magnitude to the monthly usage converted to kWh/day.
-  const rawDailyUsageKwh = profile.reduce((sum, value) => sum + value, 0);
-  if (rawDailyUsageKwh <= 0) return profile;
-  const scale = EV_TARGET_DAILY_USAGE_KWH[type] / rawDailyUsageKwh;
-  return profile.map((value) => value * scale);
+  return [...LOAD_PROFILES[type][season]];
 }
 
 function distribute(shifted: number[], destinationHours: readonly number[], energy: number): void {
@@ -247,36 +244,90 @@ function residentialApplianceScenario(
   return { base, shifted, movedKwh: Math.max(0, movedKwh) };
 }
 
-function evFastScenario(
-  type: BaseCustomerType,
-  season: ReferenceSeason,
-  eventHours: readonly number[],
+function moveEnergy(
+  base: readonly number[],
+  sourceHours: readonly number[],
+  destinationHours: readonly number[],
   shiftRate: number,
 ): HourlyRoute {
-  const base = copyProfile(type, season);
   const shifted = [...base];
-  if (type !== "EV_FAST_HIGH_VOLTAGE") return { base, shifted, movedKwh: 0 };
-  const sourceHour = 17;
-  const movedKwh = base[sourceHour] * shiftRate;
-  shifted[sourceHour] -= movedKwh;
-  shifted[eventHours[0]] += movedKwh;
-  return { base, shifted, movedKwh };
+  let movedKwh = 0;
+  sourceHours.forEach((hour) => {
+    const removed = base[hour] * shiftRate;
+    shifted[hour] -= removed;
+    movedKwh += removed;
+  });
+  distribute(shifted, destinationHours, movedKwh);
+  return { base: [...base], shifted, movedKwh };
 }
 
-function evSlowScenario(
+function evScenario21(
   type: BaseCustomerType,
   season: ReferenceSeason,
   eventHours: readonly number[],
   shiftRate: number,
 ): HourlyRoute {
   const base = copyProfile(type, season);
-  const shifted = [...base];
-  if (type !== "EV_SLOW_LOW_VOLTAGE") return { base, shifted, movedKwh: 0 };
-  const sourceHours = [23, 0, 1];
-  const movedKwh = sourceHours.reduce((sum, hour) => sum + base[hour] * shiftRate, 0);
-  sourceHours.forEach((hour) => { shifted[hour] -= base[hour] * shiftRate; });
-  distribute(shifted, eventHours, movedKwh);
-  return { base, shifted, movedKwh };
+  if (type === "RESIDENTIAL_TOU") return { base, shifted: [...base], movedKwh: 0 };
+  if (type === "EV_SLOW_LOW_VOLTAGE") {
+    const hourCount = Math.min(EV_SLOW_CHARGE_HOURS.length, eventHours.length);
+    return moveEnergy(
+      base,
+      EV_SLOW_CHARGE_HOURS.slice(0, hourCount),
+      eventHours.slice(0, hourCount),
+      shiftRate,
+    );
+  }
+  const sourceHour = PEAK_HOURS.reduce(
+    (best, hour) => (base[hour] > base[best] ? hour : best),
+    PEAK_HOURS[0],
+  );
+  return moveEnergy(base, [sourceHour], [eventHours[0]], shiftRate);
+}
+
+function representativeEvProfile(type: BaseCustomerType): number[] {
+  const profile = repeated(0, 24);
+  if (type === "EV_SLOW_LOW_VOLTAGE") {
+    EV_SLOW_CHARGE_HOURS.forEach((hour) => {
+      profile[hour] = EV_REPRESENTATIVE_BASIS.slow.contractPowerKw;
+    });
+  } else if (type === "EV_FAST_HIGH_VOLTAGE") {
+    profile[EV_FAST_REPRESENTATIVE_SOURCE_HOUR] = EV_REPRESENTATIVE_BASIS.fast.contractPowerKw;
+  }
+  return profile;
+}
+
+function weeklyChargeOccurrence(dayType: ReferenceDayType): number {
+  // 대표고객은 매주 평일 1회, 주말 1회 충전한다. 발령일이 특정 요일에
+  // 균등하게 분포한다고 보고 평일 발령일에는 1/5, 주말·공휴일에는 1/2를 적용한다.
+  return dayType === "WEEKDAY" ? 1 / 5 : 1 / 2;
+}
+
+function evScenario22(
+  type: BaseCustomerType,
+  dayType: ReferenceDayType,
+  eventHours: readonly number[],
+  shiftRate: number,
+): HourlyRoute {
+  const base = representativeEvProfile(type);
+  if (type === "RESIDENTIAL_TOU") return { base, shifted: [...base], movedKwh: 0 };
+  const occurrenceWeight = weeklyChargeOccurrence(dayType);
+  if (type === "EV_SLOW_LOW_VOLTAGE") {
+    const hourCount = Math.min(EV_SLOW_CHARGE_HOURS.length, eventHours.length);
+    return {
+      ...moveEnergy(
+        base,
+        EV_SLOW_CHARGE_HOURS.slice(0, hourCount),
+        eventHours.slice(0, hourCount),
+        shiftRate,
+      ),
+      occurrenceWeight,
+    };
+  }
+  return {
+    ...moveEnergy(base, [EV_FAST_REPRESENTATIVE_SOURCE_HOUR], [eventHours[0]], shiftRate),
+    occurrenceWeight,
+  };
 }
 
 function routeForEvent(
@@ -291,8 +342,8 @@ function routeForEvent(
   if (input.shiftMode === "RES_SCENARIO_2" && type === "RESIDENTIAL_TOU") {
     return residentialApplianceScenario(event.season, event.dayType, event.hours, input, selectedAppliances);
   }
-  if (input.shiftMode === "EV_SCENARIO_2_1") return evFastScenario(type, event.season, event.hours, input.shiftRate);
-  if (input.shiftMode === "EV_SCENARIO_2_2") return evSlowScenario(type, event.season, event.hours, input.shiftRate);
+  if (input.shiftMode === "EV_SCENARIO_2_1") return evScenario21(type, event.season, event.hours, input.shiftRate);
+  if (input.shiftMode === "EV_SCENARIO_2_2") return evScenario22(type, event.dayType, event.hours, input.shiftRate);
   const base = copyProfile(type, event.season);
   return { base, shifted: [...base], movedKwh: 0 };
 }
@@ -355,6 +406,11 @@ export function runSimulation(input: SimulationInput): SimulationResult {
   const participatingCustomers = Math.round(input.customerCount * input.participationRate);
   const monthlyEventDays = Array.from({ length: 12 }, () => 0);
   events.forEach((event) => { monthlyEventDays[event.month - 1] += 1; });
+  const evChargingEventDays = input.shiftMode === "EV_SCENARIO_2_1"
+    ? events.length
+    : input.shiftMode === "EV_SCENARIO_2_2"
+      ? events.reduce((sum, event) => sum + weeklyChargeOccurrence(event.dayType), 0)
+      : 0;
 
   let benefitPerCustomer = 0;
   let movedKwhPerCustomer = 0;
@@ -367,14 +423,16 @@ export function runSimulation(input: SimulationInput): SimulationResult {
     annualCurrentBill += currentBill(type, input.analysisYear) * weight;
     events.forEach((event) => {
       const route = routeForEvent(type, input, event, selectedCodes);
+      const occurrenceWeight = route.occurrenceWeight ?? 1;
       const currentRates = tariffRates(type, event.season, event.dayType);
       const newRates = discountedRates(type, event, input.discountRate, input.weekendDiscountPriority);
-      benefitPerCustomer += (dot(route.base, currentRates) - dot(route.shifted, newRates)) * weight;
-      movedKwhPerCustomer += route.movedKwh * weight;
+      benefitPerCustomer += (dot(route.base, currentRates) - dot(route.shifted, newRates))
+        * occurrenceWeight * weight;
+      movedKwhPerCustomer += route.movedKwh * occurrenceWeight * weight;
       smpCostChangePerCustomer += route.shifted.reduce(
         (sum, value, hour) => sum + (value - route.base[hour]) * event.smp[hour],
         0,
-      ) * weight;
+      ) * occurrenceWeight * weight;
       for (let hour = 0; hour < 24; hour += 1) {
         chartBase[hour] += route.base[hour] * weight;
         chartShifted[hour] += route.shifted[hour] * weight;
@@ -407,11 +465,18 @@ export function runSimulation(input: SimulationInput): SimulationResult {
   if (input.shiftMode === "RES_SCENARIO_2" && input.customerType === "RESIDENTIAL_TOU" && selectedApplianceCount === 0) {
     warnings.push("선택된 가전이 없어 할인 효과만 계산하고 부하이전량은 0으로 계산했습니다.");
   }
-  if (input.shiftMode === "EV_SCENARIO_2_1" && input.customerType === "EV_SLOW_LOW_VOLTAGE") {
-    warnings.push("시나리오 2-1은 급속 1시간 충전 전용이므로 완속 고객의 부하이전량은 0입니다.");
+  if (input.shiftMode === "EV_SCENARIO_2_1") {
+    warnings.push("EV 시나리오 2-1은 전기예보 발령일에만 충전하는 계약종별 부하를 적용합니다. 완속은 6시간 충전구간 중 발령시간 수만큼 경부하에서, 급속은 최대부하 1시간을 발령시간으로 이전합니다.");
   }
-  if (input.shiftMode === "EV_SCENARIO_2_2" && input.customerType === "EV_FAST_HIGH_VOLTAGE") {
-    warnings.push("시나리오 2-2는 완속 3시간 충전 전용이므로 급속 고객의 부하이전량은 0입니다.");
+  if (input.shiftMode === "EV_SCENARIO_2_2") {
+    warnings.push(`EV 시나리오 2-2는 대표고객이 주 2회(평일 1회·주말 1회) 충전한다고 가정합니다. 선택 발령일과 충전일이 겹치는 계산상 기대일수는 ${evChargingEventDays.toFixed(1)}일입니다.`);
+    warnings.push("대표고객 기준은 완속 7kW·6시간·월 336kWh, 급속 50kW·1시간·월 400kWh이며 월 4주(각 8회 충전)로 환산합니다.");
+  }
+  if (input.customerType !== "RESIDENTIAL_TOU") {
+    warnings.push("EV는 계약전력 50kW 미만을 완속, 50kW 이상을 급속으로 구분합니다.");
+  }
+  if (input.customerType === "EV_TOTAL") {
+    warnings.push("전기차 전체는 2025년 사용량 기준 완속 77.2%·급속 22.8%를 가중 합산합니다.");
   }
   if (input.eventRule.mode === "ACTUAL" && input.analysisYear === 2025) {
     warnings.push("2025년 실적은 56일·195시간의 시나리오 발령구간을 적용했습니다. SMP≤0인 개별 시간은 150시간으로 별도 집계됩니다.");
@@ -434,6 +499,7 @@ export function runSimulation(input: SimulationInput): SimulationResult {
     engineVersion: ENGINE_VERSION,
     eventDays: events.length,
     eventHours: events.reduce((sum, event) => sum + event.hours.length, 0),
+    evChargingEventDays,
     participatingCustomers,
     selectedApplianceCount,
     selectableApplianceCount: SELECTABLE_APPLIANCES.length,

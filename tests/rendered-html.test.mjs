@@ -29,5 +29,8 @@ test("renders development preview metadata", async () => {
     response.headers.get("content-type") ?? "",
     /^text\/html\b/i,
   );
-  assert.match(await response.text(), developmentPreviewMeta);
+  const html = await response.text();
+  assert.match(html, developmentPreviewMeta);
+  assert.match(html, /참여고객 전체편익[\s\S]{0,240}만원/);
+  assert.doesNotMatch(html, /참여고객 전체편익[\s\S]{0,240}백만원/);
 });

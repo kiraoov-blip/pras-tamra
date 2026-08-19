@@ -1,12 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DEFAULT_SIMULATION_INPUT } from "../lib/simulator/defaults.ts";
-import {
-  EV_TARGET_DAILY_USAGE_KWH,
-  EV_TOTAL_FAST_WEIGHT,
-  EV_TOTAL_SLOW_WEIGHT,
-  runSimulation,
-} from "../lib/simulator/engine.ts";
+import { EV_TOTAL_FAST_WEIGHT, EV_TOTAL_SLOW_WEIGHT, runSimulation } from "../lib/simulator/engine.ts";
 import { ALL_APPLIANCE_CODES } from "../lib/simulator/appliances.ts";
 import type { SimulationInput } from "../lib/simulator/types.ts";
 
@@ -113,37 +108,44 @@ test("가전별 이전비중은 최대치에서 0까지 독립적으로 조절�
   assert.ok(maximum.applianceMaximumShares.ROBOT_VACUUM > 0);
 });
 
-test("EV 2-1은 급속, 2-2는 완속 충전경로에만 부하이전을 적용한다", () => {
+test("EV 2-1과 2-2는 완속·급속을 모두 계산하고 충전빈도를 구분한다", () => {
   const slow21 = simulate({ customerType: "EV_SLOW_LOW_VOLTAGE", shiftMode: "EV_SCENARIO_2_1" });
   const slow22 = simulate({ customerType: "EV_SLOW_LOW_VOLTAGE", shiftMode: "EV_SCENARIO_2_2" });
   const fast21 = simulate({ customerType: "EV_FAST_HIGH_VOLTAGE", shiftMode: "EV_SCENARIO_2_1" });
   const fast22 = simulate({ customerType: "EV_FAST_HIGH_VOLTAGE", shiftMode: "EV_SCENARIO_2_2" });
-  assert.equal(slow21.grid.shiftedEnergyMwh, 0);
+  assert.ok(slow21.grid.shiftedEnergyMwh > 0);
   assert.ok(slow22.grid.shiftedEnergyMwh > 0);
   assert.ok(fast21.grid.shiftedEnergyMwh > 0);
-  assert.equal(fast22.grid.shiftedEnergyMwh, 0);
+  assert.ok(fast22.grid.shiftedEnergyMwh > 0);
+  assert.equal(slow21.evChargingEventDays, slow21.eventDays);
+  nearly(slow22.evChargingEventDays, 19.3, 1e-9);
+  nearly(fast22.evChargingEventDays, slow22.evChargingEventDays, 1e-9);
+  nearly(sum(slow21.baseLoadProfile), sum(slow21.shiftedLoadProfile), 1e-9);
+  nearly(sum(fast21.baseLoadProfile), sum(fast21.shiftedLoadProfile), 1e-9);
+  nearly(sum(slow22.baseLoadProfile), sum(slow22.shiftedLoadProfile), 1e-9);
+  nearly(sum(fast22.baseLoadProfile), sum(fast22.shiftedLoadProfile), 1e-9);
 });
 
-test("EV 부하곡선은 월 336/400kWh 기준의 일평균 사용량으로 정규화한다", () => {
-  const slow = simulate({ customerType: "EV_SLOW_LOW_VOLTAGE", shiftMode: "SCENARIO_1" });
-  const fast = simulate({ customerType: "EV_FAST_HIGH_VOLTAGE", shiftMode: "SCENARIO_1" });
-  nearly(sum(slow.baseLoadProfile), EV_TARGET_DAILY_USAGE_KWH.EV_SLOW_LOW_VOLTAGE, 1e-9);
-  nearly(sum(fast.baseLoadProfile), EV_TARGET_DAILY_USAGE_KWH.EV_FAST_HIGH_VOLTAGE, 1e-9);
-});
+test("EV 2-2 대표고객은 완속 7kW×6시간, 급속 50kW×1시간과 주중·주말 빈도를 재현한다", () => {
+  const slow = simulate({ customerType: "EV_SLOW_LOW_VOLTAGE", shiftMode: "EV_SCENARIO_2_2", shiftRate: 1 });
+  const fast = simulate({ customerType: "EV_FAST_HIGH_VOLTAGE", shiftMode: "EV_SCENARIO_2_2", shiftRate: 1 });
+  nearly(sum(slow.baseLoadProfile), 42, 1e-9);
+  nearly(sum(fast.baseLoadProfile), 50, 1e-9);
+  assert.equal(slow.baseLoadProfile.filter((value) => value === 7).length, 6);
+  assert.equal(fast.baseLoadProfile.filter((value) => value === 50).length, 1);
 
-test("EV 전체 기본 예시는 단위 보정 후 결과를 재현한다", () => {
-  const corrected = simulate({
-    customerType: "EV_TOTAL",
-    customerCount: 10_000,
-    participationRate: 0.8,
-    shiftRate: 0.5,
-    shiftMode: "SCENARIO_1",
+  const weekday = simulate({
+    customerType: "EV_SLOW_LOW_VOLTAGE",
+    shiftMode: "EV_SCENARIO_2_2",
+    dayTypeFilter: "WEEKDAY",
   });
-  nearly(corrected.customer.annualBenefitPerCustomerWon, 6_100.953474587677);
-  nearly(corrected.customer.totalAnnualBenefitWon, 48_807_627.79670142);
-  nearly(corrected.grid.shiftedEnergyMwh, 429.68907526867787);
-  nearly(corrected.utility.smpPurchaseCostChangeWon, -50_599_630.44224127);
-  nearly(corrected.utility.shortTermNetImpactWon, 1_792_002.645539851);
+  const weekend = simulate({
+    customerType: "EV_SLOW_LOW_VOLTAGE",
+    shiftMode: "EV_SCENARIO_2_2",
+    dayTypeFilter: "WEEKEND",
+  });
+  nearly(weekday.evChargingEventDays, weekday.eventDays / 5, 1e-9);
+  nearly(weekend.evChargingEventDays, weekend.eventDays / 2, 1e-9);
 });
 
 test("EV 전체는 완속·급속 실적 비중을 합산한다", () => {

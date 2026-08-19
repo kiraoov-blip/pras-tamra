@@ -2,19 +2,19 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { REFERENCE_MONTHLY_USAGE_KWH } from "@/lib/simulator/defaults";
-import { runSimulation } from "@/lib/simulator/engine";
+import { EV_CONTRACT_POWER_THRESHOLD_KW, EV_REPRESENTATIVE_BASIS, runSimulation } from "@/lib/simulator/engine";
 import { ALL_APPLIANCE_CODES, SELECTABLE_APPLIANCES } from "@/lib/simulator/appliances";
 import type { AnalysisDayType, AnalysisSeason, AnalysisYear, ApplianceCode, CustomerTypeCode, EventMode, LoadShiftMode } from "@/lib/simulator/types";
 
-type CustomerType = "주택용 TOU" | "전기차 전체" | "전기차 완속 저압" | "전기차 급속·고압";
+type CustomerType = "주택용 TOU" | "전기차 전체" | "전기차 완속(50kW 미만)" | "전기차 급속(50kW 이상)";
 type ResultTab = "고객" | "한전" | "계통";
 
 const months = ["1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월", "12월"];
 const CUSTOMER_CODES: Record<CustomerType, CustomerTypeCode> = {
   "주택용 TOU": "RESIDENTIAL_TOU",
   "전기차 전체": "EV_TOTAL",
-  "전기차 완속 저압": "EV_SLOW_LOW_VOLTAGE",
-  "전기차 급속·고압": "EV_FAST_HIGH_VOLTAGE",
+  "전기차 완속(50kW 미만)": "EV_SLOW_LOW_VOLTAGE",
+  "전기차 급속(50kW 이상)": "EV_FAST_HIGH_VOLTAGE",
 };
 const SEASON_LABELS: Record<AnalysisSeason, string> = {
   ALL: "전체 계절",
@@ -49,7 +49,7 @@ function formatMwh(value: number) {
 }
 
 function formatTenThousandWon(value: number) {
-  return formatInteger(value / 10_000);
+  return `${formatInteger(value / 10_000)}만원`;
 }
 
 function clampPercent(value: number) {
@@ -99,6 +99,13 @@ export default function Home() {
 
   const customerCode = CUSTOMER_CODES[customerType];
   const monthlyUsage = REFERENCE_MONTHLY_USAGE_KWH[customerCode];
+  const contractPowerBasis = customerCode === "EV_TOTAL"
+    ? `${EV_CONTRACT_POWER_THRESHOLD_KW}kW 미만·이상 합산`
+    : customerCode === "EV_SLOW_LOW_VOLTAGE"
+      ? `${EV_CONTRACT_POWER_THRESHOLD_KW}kW 미만`
+      : customerCode === "EV_FAST_HIGH_VOLTAGE"
+        ? `${EV_CONTRACT_POWER_THRESHOLD_KW}kW 이상`
+        : "-";
   const result = useMemo(() => runSimulation({
     analysisYear,
     seasonFilter,
@@ -150,7 +157,7 @@ export default function Home() {
       title: "할인과 부하이전으로 발생하는 요금 편익",
       items: [
         ["고객당 기준기간 편익", formatWon(result.customer.annualBenefitPerCustomerWon)],
-        ["참여고객 전체 편익", formatWon(result.customer.totalAnnualBenefitWon)],
+        ["참여고객 전체 편익", formatTenThousandWon(result.customer.totalAnnualBenefitWon)],
         ["제도 적용 후 고객요금", `${formatInteger(result.customer.newAnnualBillWon)}원`],
       ],
     },
@@ -208,16 +215,18 @@ export default function Home() {
     ]
     : [
       { mode: "SCENARIO_1", title: "시나리오 1 · 전체부하 균등이전", description: "계약종별 전체 부하에서 발령시간 수만큼 최대부하 시간대 사용량을 균등 이전" },
-      { mode: "EV_SCENARIO_2_1" as const, title: "시나리오 2-1 · 공공용 급속충전", description: "급속 1시간 충전을 최대부하 시간대에서 발령 시작시간으로 이전" },
-      { mode: "EV_SCENARIO_2_2" as const, title: "시나리오 2-2 · 개인용 완속충전", description: "심야 3시간 완속충전을 발령시간대로 균등 이전" },
+      { mode: "EV_SCENARIO_2_1" as const, title: "시나리오 2-1 · 발령일 계약종별 충전", description: "발령일에만 충전: 완속은 경부하에서 발령시간만큼, 급속은 최대부하 1시간을 이전" },
+      { mode: "EV_SCENARIO_2_2" as const, title: "시나리오 2-2 · 주 2회 대표고객 충전", description: "평일 1회·주말 1회 충전하는 대표고객에 동일한 완속·급속 이전 규칙 적용" },
     ];
 
   const routeSource = scenario === "RES_SCENARIO_2"
     ? "선택한 주요 가전"
-    : scenario === "EV_SCENARIO_2_1"
-      ? "급속 충전 집중시간"
-      : scenario === "EV_SCENARIO_2_2"
-        ? "완속 심야 충전시간"
+    : scenario === "EV_SCENARIO_2_1" || scenario === "EV_SCENARIO_2_2"
+      ? customerCode === "EV_SLOW_LOW_VOLTAGE"
+        ? "완속 경부하 충전구간"
+        : customerCode === "EV_FAST_HIGH_VOLTAGE"
+          ? "급속 최대부하 1시간"
+          : "완속 경부하·급속 최대부하"
         : "최대부하 시간대 전체부하";
 
   return (
@@ -240,12 +249,13 @@ export default function Home() {
             <label className="control-field"><FieldLabel>분석연도</FieldLabel><select value={analysisYear} onChange={(event) => setAnalysisYear(Number(event.target.value) as AnalysisYear)}><option value={2024}>2024</option><option value={2025}>2025</option><option value={2026}>2026 YTD</option></select></label>
             <label className="control-field"><FieldLabel hint="미선택 시 전체">계절</FieldLabel><select value={seasonFilter} onChange={(event) => setSeasonFilter(event.target.value as AnalysisSeason)}><option value="ALL">전체 계절</option><option value="SHOULDER">봄·가을</option><option value="SUMMER">여름</option><option value="WINTER">겨울</option></select></label>
             <label className="control-field"><FieldLabel hint="미선택 시 전체">요일</FieldLabel><select value={dayTypeFilter} onChange={(event) => setDayTypeFilter(event.target.value as AnalysisDayType)}><option value="ALL">전체 요일</option><option value="WEEKDAY">주중</option><option value="WEEKEND">주말</option></select></label>
-            <label className="control-field"><FieldLabel>고객 유형</FieldLabel><select value={customerType} onChange={(event) => changeCustomerType(event.target.value as CustomerType)}><option>주택용 TOU</option><option>전기차 전체</option><option>전기차 완속 저압</option><option>전기차 급속·고압</option></select></label>
+            <label className="control-field"><FieldLabel>고객 유형</FieldLabel><select value={customerType} onChange={(event) => changeCustomerType(event.target.value as CustomerType)}><option>주택용 TOU</option><option>전기차 전체</option><option>전기차 완속(50kW 미만)</option><option>전기차 급속(50kW 이상)</option></select></label>
             <label className="control-field"><FieldLabel hint="호">대상 고객 수</FieldLabel><input className="formatted-number" inputMode="numeric" value={formatInteger(customerCount)} onChange={(event) => {
               const digits = event.target.value.replace(/[^0-9]/g, "");
               setCustomerCount(Math.max(1, Number(digits) || 1));
             }} /></label>
             <label className="control-field"><FieldLabel hint="월">기준 사용량</FieldLabel><div className="unit-input"><input value={formatOneDecimal(monthlyUsage)} readOnly /><span>kWh</span></div></label>
+            {customerCode !== "RESIDENTIAL_TOU" ? <label className="control-field"><FieldLabel>계약전력 구분</FieldLabel><div className="unit-input"><input value={contractPowerBasis} readOnly /></div></label> : null}
             <label className="control-field range-field"><FieldLabel hint={`${participation}%`}>제도 참여율</FieldLabel><input type="range" min="0" max="100" step="5" value={participation} onChange={(event) => setParticipation(Number(event.target.value))} /></label>
             <label className="control-field range-field"><FieldLabel hint={`${discount}%`}>발령시간 할인율</FieldLabel><input type="range" min="0" max="100" step="5" value={discount} onChange={(event) => setDiscount(Number(event.target.value))} /></label>
             <div className="control-field"><FieldLabel>주말할인 중복처리</FieldLabel><button type="button" className={`toggle-row ${weekendPriority ? "active" : ""}`} onClick={() => setWeekendPriority((value) => !value)} aria-pressed={weekendPriority}><span className="toggle"><i /></span><span>{weekendPriority ? "기존 주말할인 우선" : "전기예보 할인 우선"}</span></button></div>
@@ -281,6 +291,13 @@ export default function Home() {
               <div className="route-row"><div><span>이전 출발</span><strong>선택한 주요 가전</strong></div><span className="route-arrow">→</span><div><span>이전 도착</span><strong>발령시간</strong></div></div>
             </div>}
           </div>
+          {(scenario === "EV_SCENARIO_2_1" || scenario === "EV_SCENARIO_2_2") && customerCode !== "RESIDENTIAL_TOU" ? <div className="ev-scenario-basis">
+            <div><span>완속 · 50kW 미만</span><strong>{EV_REPRESENTATIVE_BASIS.slow.contractPowerKw}kW × {EV_REPRESENTATIVE_BASIS.slow.chargeHours}시간</strong><small>경부하 충전 · 월 {formatInteger(EV_REPRESENTATIVE_BASIS.slow.monthlyUsageKwh)}kWh</small></div>
+            <div><span>급속 · 50kW 이상</span><strong>{EV_REPRESENTATIVE_BASIS.fast.contractPowerKw}kW × {EV_REPRESENTATIVE_BASIS.fast.chargeHours}시간</strong><small>최대부하 충전 · 월 {formatInteger(EV_REPRESENTATIVE_BASIS.fast.monthlyUsageKwh)}kWh</small></div>
+            <p>{scenario === "EV_SCENARIO_2_1"
+              ? `계약종별 실적 부하곡선을 사용하고 선택된 ${result.eventDays}개 발령일에 충전한 것으로 계산합니다.`
+              : `대표고객이 주 2회(평일 1회·주말 1회) 충전하며, 선택 발령일과 충전일이 겹치는 기대일수 ${formatOneDecimal(result.evChargingEventDays)}일을 계산에 반영합니다.`}</p>
+          </div> : null}
           {scenario === "RES_SCENARIO_2" && customerType === "주택용 TOU" ? <div className="appliance-selector">
             <div className="appliance-selector-head">
               <div><p>이전 대상 주요 가전</p><strong>{result.selectedApplianceCount}/{result.selectableApplianceCount}개 선택 · 이전 가능량 {Math.round(result.selectedApplianceShare * 100)}%</strong></div>
@@ -328,7 +345,7 @@ export default function Home() {
           <article className="metric-card"><p>참여 고객</p><strong>{formatInteger(result.participatingCustomers)}<small>호</small></strong><span>전체의 {participation}%</span></article>
           <article className="metric-card accent-green"><p>부하 이전량</p><strong>{formatOneDecimal(result.grid.shiftedEnergyMwh)}<small>MWh</small></strong><span>에너지 총량 보존</span></article>
           <article className="metric-card"><p>고객당 기준기간 편익</p><strong>{formatInteger(result.customer.annualBenefitPerCustomerWon)}<small>원</small></strong><span>할인 및 부하이전 반영</span></article>
-          <article className="metric-card accent-blue"><p>참여고객 전체편익</p><strong>{formatTenThousandWon(result.customer.totalAnnualBenefitWon)}<small>만원</small></strong><span>참여 고객 합계</span></article>
+          <article className="metric-card accent-blue"><p>참여고객 전체편익</p><strong>{formatTenThousandWon(result.customer.totalAnnualBenefitWon)}</strong><span>원 단위 전체편익을 만원 단위로 환산</span></article>
         </section>
 
         <section className="analysis-grid">
