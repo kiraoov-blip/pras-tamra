@@ -52,10 +52,6 @@ function formatTenThousandWon(value: number) {
   return `${formatInteger(value / 10_000)}만원`;
 }
 
-function clampPercent(value: number) {
-  return Math.max(0, Math.min(100, Math.round(value)));
-}
-
 function clampOneDecimalPercent(value: number) {
   return Math.max(0, Math.min(100, Math.round(value * 10) / 10));
 }
@@ -316,19 +312,19 @@ export default function Home() {
               {scenarioOptions.map((option) => <button key={option.mode} className={`scenario-option ${scenario === option.mode ? "selected" : ""}`} onClick={() => setScenario(option.mode)}><span className="radio-dot" /><span><strong>{option.title}</strong><small>{option.description}</small></span></button>)}
             </div>
             {scenario !== "RES_SCENARIO_2" ? <div className="shift-control">
-              <div className="shift-value"><span>수요이전율</span><strong>{shiftRate}<small>%</small></strong></div>
+              <div className="shift-value"><span>수요이전율</span><strong>{shiftRate.toFixed(1)}<small>%</small></strong></div>
               <div className="shift-slider-row">
-                <input type="range" min="0" max="100" step="1" value={shiftRate} onChange={(event) => setShiftRate(Number(event.target.value))} />
-                <label className="percent-entry"><input aria-label="수요이전율 직접 입력" type="number" min="0" max="100" step="1" value={shiftRate} onChange={(event) => setShiftRate(clampPercent(Number(event.target.value) || 0))} /><span>%</span></label>
+                <input type="range" min="0" max="100" step="0.1" value={shiftRate} onChange={(event) => setShiftRate(clampOneDecimalPercent(Number(event.target.value)))} />
+                <label className="percent-entry"><input aria-label="수요이전율 직접 입력" type="number" min="0" max="100" step="0.1" value={shiftRate} onChange={(event) => setShiftRate(clampOneDecimalPercent(Number(event.target.value) || 0))} /><span>%</span></label>
               </div>
               <div className="range-marks"><span>0%</span><span>50%</span><span>100%</span></div>
               <p className="shift-definition">이전 가능한 부하를 모두 옮기면 100%, 절반만 옮기면 50%, 반응하지 않으면 0%입니다.</p>
               <div className="route-row"><div><span>이전 출발</span><strong>{routeSource}</strong></div><span className="route-arrow">→</span><div><span>이전 도착</span><strong>발령시간</strong></div></div>
             </div> : <div className="shift-control appliance-summary">
-              <div className="shift-value"><span>수요이전율</span><strong>{shiftRate}<small>%</small></strong></div>
+              <div className="shift-value"><span>수요이전율</span><strong>{shiftRate.toFixed(1)}<small>%</small></strong></div>
               <div className="shift-slider-row">
-                <input type="range" min="0" max="100" step="1" value={shiftRate} onChange={(event) => setShiftRate(Number(event.target.value))} />
-                <label className="percent-entry"><input aria-label="수요이전율 직접 입력" type="number" min="0" max="100" step="1" value={shiftRate} onChange={(event) => setShiftRate(clampPercent(Number(event.target.value) || 0))} /><span>%</span></label>
+                <input type="range" min="0" max="100" step="0.1" value={shiftRate} onChange={(event) => setShiftRate(clampOneDecimalPercent(Number(event.target.value)))} />
+                <label className="percent-entry"><input aria-label="수요이전율 직접 입력" type="number" min="0" max="100" step="0.1" value={shiftRate} onChange={(event) => setShiftRate(clampOneDecimalPercent(Number(event.target.value) || 0))} /><span>%</span></label>
               </div>
               <div className="range-marks"><span>0%</span><span>50%</span><span>100%</span></div>
               <p>선택한 가전의 최대 이전가능량을 기준으로 실제 반응 비율을 적용합니다. 현재 유효 이전비중 합계는 {(result.selectedApplianceShare * 100).toFixed(1)}%입니다.</p>
