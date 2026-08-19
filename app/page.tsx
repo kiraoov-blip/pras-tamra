@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { REFERENCE_MONTHLY_USAGE_KWH } from "@/lib/simulator/defaults";
 import { runSimulation } from "@/lib/simulator/engine";
 import { ALL_APPLIANCE_CODES, SELECTABLE_APPLIANCES } from "@/lib/simulator/appliances";
@@ -30,7 +30,7 @@ const DAY_TYPE_LABELS: Record<AnalysisDayType, string> = {
 const FULL_APPLIANCE_RATES = Object.fromEntries(
   ALL_APPLIANCE_CODES.map((code) => [code, 1]),
 ) as Record<ApplianceCode, number>;
-const LINE_CHART = { width: 760, height: 280, left: 42, right: 18, top: 20, bottom: 34 } as const;
+const MAX_CHART_WIDTH = 760;
 
 function formatInteger(value: number) {
   return new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 0 }).format(value);
@@ -84,6 +84,18 @@ export default function Home() {
   const [resultTab, setResultTab] = useState<ResultTab>("고객");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [hoveredHour, setHoveredHour] = useState<number | null>(null);
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const [chartWidth, setChartWidth] = useState(MAX_CHART_WIDTH);
+
+  useEffect(() => {
+    const container = chartContainerRef.current;
+    if (!container) return undefined;
+    const updateWidth = () => setChartWidth(Math.max(300, Math.min(MAX_CHART_WIDTH, Math.floor(container.clientWidth))));
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
 
   const customerCode = CUSTOMER_CODES[customerType];
   const monthlyUsage = REFERENCE_MONTHLY_USAGE_KWH[customerCode];
@@ -112,11 +124,21 @@ export default function Home() {
   const averageEventHours = result.eventDays ? result.eventHours / result.eventDays : 0;
   const yearLabel = analysisYear === 2026 ? "2026 YTD" : `${analysisYear}년`;
   const scopeLabel = `${yearLabel} · ${SEASON_LABELS[seasonFilter]} · ${DAY_TYPE_LABELS[dayTypeFilter]}`;
-  const chartPlotWidth = LINE_CHART.width - LINE_CHART.left - LINE_CHART.right;
-  const chartPlotHeight = LINE_CHART.height - LINE_CHART.top - LINE_CHART.bottom;
-  const chartX = (index: number) => LINE_CHART.left + (index / 23) * chartPlotWidth;
-  const chartY = (value: number) => LINE_CHART.top + chartPlotHeight - (value / maxProfile) * chartPlotHeight;
+  const compactChart = chartWidth < 520;
+  const lineChart = {
+    width: chartWidth,
+    height: compactChart ? 250 : 280,
+    left: compactChart ? 36 : 42,
+    right: compactChart ? 10 : 18,
+    top: 20,
+    bottom: 34,
+  };
+  const chartPlotWidth = lineChart.width - lineChart.left - lineChart.right;
+  const chartPlotHeight = lineChart.height - lineChart.top - lineChart.bottom;
+  const chartX = (index: number) => lineChart.left + (index / 23) * chartPlotWidth;
+  const chartY = (value: number) => lineChart.top + chartPlotHeight - (value / maxProfile) * chartPlotHeight;
   const linePoints = (values: readonly number[]) => values.map((value, index) => `${chartX(index)},${chartY(value)}`).join(" ");
+  const chartHourLabels = compactChart ? [1, 5, 9, 13, 17, 21, 24] : [1, 4, 7, 10, 13, 16, 19, 22, 24];
 
   const resultCopy: Record<ResultTab, {
     eyebrow: string;
@@ -313,18 +335,18 @@ export default function Home() {
           <article className="section-card load-chart-card">
             <div className="section-heading compact"><div><p>03 · LOAD PROFILE</p><h2>시간별 전력사용량 변화</h2></div><div className="legend"><span><i className="legend-base" />현행</span><span><i className="legend-shifted" />부하이전 후</span></div></div>
             <div className="chart-callout"><StatusDot tone="amber" /> {eventMode === "ACTUAL" ? "10–16시" : `${startHour}–${endHour}시`} 전기예보 발령시간</div>
-            <div className="load-line-chart" onMouseLeave={() => setHoveredHour(null)}>
-              <svg viewBox={`0 0 ${LINE_CHART.width} ${LINE_CHART.height}`} role="img" aria-label="24시간 현행 및 부하이전 후 사용량 꺾은선 그래프">
+            <div className="load-line-chart" ref={chartContainerRef} onMouseLeave={() => setHoveredHour(null)}>
+              <svg viewBox={`0 0 ${lineChart.width} ${lineChart.height}`} role="img" aria-label="24시간 현행 및 부하이전 후 사용량 꺾은선 그래프">
                 {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
-                  const y = LINE_CHART.top + chartPlotHeight * (1 - ratio);
-                  return <g className="line-grid" key={ratio}><line x1={LINE_CHART.left} x2={LINE_CHART.width - LINE_CHART.right} y1={y} y2={y} /><text x={LINE_CHART.left - 7} y={y + 4}>{formatOneDecimal(maxProfile * ratio)}</text></g>;
+                  const y = lineChart.top + chartPlotHeight * (1 - ratio);
+                  return <g className="line-grid" key={ratio}><line x1={lineChart.left} x2={lineChart.width - lineChart.right} y1={y} y2={y} /><text x={lineChart.left - 7} y={y + 4}>{formatOneDecimal(maxProfile * ratio)}</text></g>;
                 })}
                 {(() => {
                   const windowStart = eventMode === "ACTUAL" ? 10 : startHour;
                   const windowEnd = eventMode === "ACTUAL" ? 16 : endHour;
                   const x1 = chartX(Math.max(0, windowStart - 1)) - chartPlotWidth / 46;
                   const x2 = chartX(Math.min(23, windowEnd - 1)) + chartPlotWidth / 46;
-                  return <rect className="forecast-band" x={x1} y={LINE_CHART.top} width={x2 - x1} height={chartPlotHeight} />;
+                  return <rect className="forecast-band" x={x1} y={lineChart.top} width={x2 - x1} height={chartPlotHeight} />;
                 })()}
                 <polyline className="profile-line base-line" points={linePoints(result.baseLoadProfile)} />
                 <polyline className="profile-line shifted-line" points={linePoints(result.shiftedLoadProfile)} />
@@ -334,7 +356,7 @@ export default function Home() {
                   <rect
                     className="point-hitarea"
                     x={chartX(index) - chartPlotWidth / 46}
-                    y={LINE_CHART.top}
+                    y={lineChart.top}
                     width={chartPlotWidth / 23}
                     height={chartPlotHeight}
                     tabIndex={0}
@@ -344,14 +366,15 @@ export default function Home() {
                     onBlur={() => setHoveredHour(null)}
                   />
                 </g>)}
-                {[1, 4, 7, 10, 13, 16, 19, 22, 24].map((hour) => <text className="hour-label" x={chartX(hour - 1)} y={LINE_CHART.height - 9} key={hour}>{hour}</text>)}
+                {chartHourLabels.map((hour) => <text className="hour-label" x={chartX(hour - 1)} y={lineChart.height - 9} key={hour}>{hour}</text>)}
                 <text className="axis-unit" x="4" y="12">kWh/호</text>
                 {hoveredHour !== null ? (() => {
                   const x = chartX(hoveredHour);
-                  const boxX = Math.max(4, Math.min(LINE_CHART.width - 170, x - 82));
+                  const tooltipWidth = compactChart ? 148 : 166;
+                  const boxX = Math.max(4, Math.min(lineChart.width - tooltipWidth - 4, x - tooltipWidth / 2));
                   return <g className="chart-tooltip">
-                    <line x1={x} x2={x} y1={LINE_CHART.top} y2={LINE_CHART.top + chartPlotHeight} />
-                    <rect x={boxX} y="7" width="166" height="58" rx="8" />
+                    <line x1={x} x2={x} y1={lineChart.top} y2={lineChart.top + chartPlotHeight} />
+                    <rect x={boxX} y="7" width={tooltipWidth} height="58" rx="8" />
                     <text x={boxX + 10} y="25">{hoveredHour + 1}시</text>
                     <text x={boxX + 10} y="42">현행 {formatOneDecimal(result.baseLoadProfile[hoveredHour])} kWh</text>
                     <text x={boxX + 10} y="57">이전 후 {formatOneDecimal(result.shiftedLoadProfile[hoveredHour])} kWh</text>
