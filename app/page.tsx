@@ -70,7 +70,6 @@ export default function Home() {
   const [dayTypeFilter, setDayTypeFilter] = useState<AnalysisDayType>("ALL");
   const [customerType, setCustomerType] = useState<CustomerType>("주택용 TOU");
   const [customerCount, setCustomerCount] = useState(1200);
-  const [participation, setParticipation] = useState(80);
   const [discount, setDiscount] = useState(50);
   const [shiftRate, setShiftRate] = useState(50);
   const [scenario, setScenario] = useState<LoadShiftMode>("SCENARIO_1");
@@ -112,7 +111,6 @@ export default function Home() {
     dayTypeFilter,
     customerType: customerCode,
     customerCount,
-    participationRate: participation / 100,
     discountRate: discount / 100,
     shiftRate: shiftRate / 100,
     shiftMode: scenario,
@@ -125,7 +123,7 @@ export default function Home() {
       endHour,
       smpThresholdWonPerKwh: smpThreshold,
     },
-  }), [analysisYear, seasonFilter, dayTypeFilter, customerCode, customerCount, participation, discount, shiftRate, scenario, selectedAppliances, applianceShiftRates, weekendPriority, eventMode, startHour, endHour, smpThreshold]);
+  }), [analysisYear, seasonFilter, dayTypeFilter, customerCode, customerCount, discount, shiftRate, scenario, selectedAppliances, applianceShiftRates, weekendPriority, eventMode, startHour, endHour, smpThreshold]);
 
   const maxProfile = Math.max(...result.baseLoadProfile, ...result.shiftedLoadProfile) * 1.08;
   const averageEventHours = result.eventDays ? result.eventHours / result.eventDays : 0;
@@ -157,7 +155,7 @@ export default function Home() {
       title: "할인과 부하이전으로 발생하는 요금 편익",
       items: [
         ["고객당 기준기간 편익", formatWon(result.customer.annualBenefitPerCustomerWon)],
-        ["참여고객 전체 편익", formatTenThousandWon(result.customer.totalAnnualBenefitWon)],
+        ["대상고객 전체 편익", formatTenThousandWon(result.customer.totalAnnualBenefitWon)],
         ["제도 적용 후 고객요금", `${formatInteger(result.customer.newAnnualBillWon)}원`],
       ],
     },
@@ -185,7 +183,7 @@ export default function Home() {
   const reset = () => {
     setAnalysisYear(2025); setSeasonFilter("ALL"); setDayTypeFilter("ALL");
     setCustomerType("주택용 TOU"); setCustomerCount(1200);
-    setParticipation(80); setDiscount(50); setShiftRate(50); setScenario("SCENARIO_1");
+    setDiscount(50); setShiftRate(50); setScenario("SCENARIO_1");
     setSelectedAppliances([...ALL_APPLIANCE_CODES]);
     setApplianceShiftRates({ ...FULL_APPLIANCE_RATES });
     setWeekendPriority(true); setEventMode("ACTUAL"); setSmpThreshold(0);
@@ -256,7 +254,6 @@ export default function Home() {
             }} /></label>
             <label className="control-field"><FieldLabel hint="월">기준 사용량</FieldLabel><div className="unit-input"><input value={formatOneDecimal(monthlyUsage)} readOnly /><span>kWh</span></div></label>
             {customerCode !== "RESIDENTIAL_TOU" ? <label className="control-field"><FieldLabel>계약전력 구분</FieldLabel><div className="unit-input"><input value={contractPowerBasis} readOnly /></div></label> : null}
-            <label className="control-field range-field"><FieldLabel hint={`${participation}%`}>제도 참여율</FieldLabel><input type="range" min="0" max="100" step="5" value={participation} onChange={(event) => setParticipation(Number(event.target.value))} /></label>
             <label className="control-field range-field"><FieldLabel hint={`${discount}%`}>발령시간 할인율</FieldLabel><input type="range" min="0" max="100" step="5" value={discount} onChange={(event) => setDiscount(Number(event.target.value))} /></label>
             <div className="control-field"><FieldLabel>주말할인 중복처리</FieldLabel><button type="button" className={`toggle-row ${weekendPriority ? "active" : ""}`} onClick={() => setWeekendPriority((value) => !value)} aria-pressed={weekendPriority}><span className="toggle"><i /></span><span>{weekendPriority ? "기존 주말할인 우선" : "전기예보 할인 우선"}</span></button></div>
           </div>
@@ -278,16 +275,22 @@ export default function Home() {
               {scenarioOptions.map((option) => <button key={option.mode} className={`scenario-option ${scenario === option.mode ? "selected" : ""}`} onClick={() => setScenario(option.mode)}><span className="radio-dot" /><span><strong>{option.title}</strong><small>{option.description}</small></span></button>)}
             </div>
             {scenario !== "RES_SCENARIO_2" ? <div className="shift-control">
-              <div className="shift-value"><span>부하이전율</span><strong>{shiftRate}<small>%</small></strong></div>
+              <div className="shift-value"><span>수요이전율</span><strong>{shiftRate}<small>%</small></strong></div>
               <div className="shift-slider-row">
                 <input type="range" min="0" max="100" step="1" value={shiftRate} onChange={(event) => setShiftRate(Number(event.target.value))} />
-                <label className="percent-entry"><input aria-label="부하이전율 직접 입력" type="number" min="0" max="100" step="1" value={shiftRate} onChange={(event) => setShiftRate(clampPercent(Number(event.target.value) || 0))} /><span>%</span></label>
+                <label className="percent-entry"><input aria-label="수요이전율 직접 입력" type="number" min="0" max="100" step="1" value={shiftRate} onChange={(event) => setShiftRate(clampPercent(Number(event.target.value) || 0))} /><span>%</span></label>
               </div>
               <div className="range-marks"><span>0%</span><span>50%</span><span>100%</span></div>
+              <p className="shift-definition">이전 가능한 부하를 모두 옮기면 100%, 절반만 옮기면 50%, 반응하지 않으면 0%입니다.</p>
               <div className="route-row"><div><span>이전 출발</span><strong>{routeSource}</strong></div><span className="route-arrow">→</span><div><span>이전 도착</span><strong>발령시간</strong></div></div>
             </div> : <div className="shift-control appliance-summary">
-              <div className="shift-value"><span>가전별 이전비중 합계</span><strong>{(result.selectedApplianceShare * 100).toFixed(1)}<small>%</small></strong></div>
-              <p>전체 13개 가전의 최대 이전가능량을 100%로 보고, 아래 슬라이더에서 가전별 기여분을 조절합니다.</p>
+              <div className="shift-value"><span>수요이전율</span><strong>{shiftRate}<small>%</small></strong></div>
+              <div className="shift-slider-row">
+                <input type="range" min="0" max="100" step="1" value={shiftRate} onChange={(event) => setShiftRate(Number(event.target.value))} />
+                <label className="percent-entry"><input aria-label="수요이전율 직접 입력" type="number" min="0" max="100" step="1" value={shiftRate} onChange={(event) => setShiftRate(clampPercent(Number(event.target.value) || 0))} /><span>%</span></label>
+              </div>
+              <div className="range-marks"><span>0%</span><span>50%</span><span>100%</span></div>
+              <p>선택한 가전의 최대 이전가능량을 기준으로 실제 반응 비율을 적용합니다. 현재 유효 이전비중 합계는 {(result.selectedApplianceShare * 100).toFixed(1)}%입니다.</p>
               <div className="route-row"><div><span>이전 출발</span><strong>선택한 주요 가전</strong></div><span className="route-arrow">→</span><div><span>이전 도착</span><strong>발령시간</strong></div></div>
             </div>}
           </div>
@@ -335,17 +338,17 @@ export default function Home() {
                 </div>;
               })}
             </div>
-            <p className="appliance-note">가전별 최대 비중은 {scopeLabel}의 선택 발령일에서 발령시간 밖에 존재하는 13개 가전의 최대 이전가능량 합계를 100%로 환산한 구성비입니다. 기본값은 각 가전의 최대치이며, 슬라이더를 낮추면 해당 가전의 이전량과 편익이 즉시 감소합니다.</p>
+            <p className="appliance-note">가전별 최대 비중은 {scopeLabel}의 선택 발령일에서 발령시간 밖에 존재하는 13개 가전의 최대 이전가능량 합계를 100%로 환산한 구성비입니다. 각 가전 설정값에 공통 수요이전율을 곱하며, 수요이전율 0%에서는 모든 가전이 반응하지 않습니다.</p>
           </div> : null}
         </section>
 
         <section className="metric-grid" aria-label="분석 핵심 지표">
           <article className="metric-card accent-blue"><p>발령일수</p><strong>{formatInteger(result.eventDays)}<small>일</small></strong><span>{scopeLabel}</span></article>
           <article className="metric-card"><p>총 발령시간</p><strong>{formatInteger(result.eventHours)}<small>시간</small></strong><span>일평균 {averageEventHours.toFixed(1)}시간</span></article>
-          <article className="metric-card"><p>참여 고객</p><strong>{formatInteger(result.participatingCustomers)}<small>호</small></strong><span>전체의 {participation}%</span></article>
+          <article className="metric-card"><p>분석대상 고객</p><strong>{formatInteger(result.targetCustomers)}<small>호</small></strong><span>입력한 대상 고객 전체</span></article>
           <article className="metric-card accent-green"><p>부하 이전량</p><strong>{formatOneDecimal(result.grid.shiftedEnergyMwh)}<small>MWh</small></strong><span>에너지 총량 보존</span></article>
           <article className="metric-card"><p>고객당 기준기간 편익</p><strong>{formatInteger(result.customer.annualBenefitPerCustomerWon)}<small>원</small></strong><span>할인 및 부하이전 반영</span></article>
-          <article className="metric-card accent-blue"><p>참여고객 전체편익</p><strong>{formatTenThousandWon(result.customer.totalAnnualBenefitWon)}</strong><span>원 단위 전체편익을 만원 단위로 환산</span></article>
+          <article className="metric-card accent-blue"><p>대상고객 전체편익</p><strong>{formatTenThousandWon(result.customer.totalAnnualBenefitWon)}</strong><span>대상 고객 전체의 편익 합계</span></article>
         </section>
 
         <section className="analysis-grid">

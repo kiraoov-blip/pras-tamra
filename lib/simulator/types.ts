@@ -42,8 +42,8 @@ export interface SimulationInput {
   dayTypeFilter: AnalysisDayType;
   customerType: CustomerTypeCode;
   customerCount: number;
-  participationRate: number;
   discountRate: number;
+  /** Share of technically movable load that actually responds (0-1). */
   shiftRate: number;
   shiftMode: LoadShiftMode;
   selectedAppliances: ApplianceCode[];
@@ -80,7 +80,7 @@ export interface SimulationResult {
   eventHours: number;
   /** EV 시나리오에서 충전일과 발령일이 겹치는 계산상 기대일수. */
   evChargingEventDays: number;
-  participatingCustomers: number;
+  targetCustomers: number;
   selectedApplianceCount: number;
   selectableApplianceCount: number;
   selectedApplianceShare: number;

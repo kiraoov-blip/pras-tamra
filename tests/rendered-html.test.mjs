@@ -31,6 +31,6 @@ test("renders development preview metadata", async () => {
   );
   const html = await response.text();
   assert.match(html, developmentPreviewMeta);
-  assert.match(html, /참여고객 전체편익[\s\S]{0,240}만원/);
-  assert.doesNotMatch(html, /참여고객 전체편익[\s\S]{0,240}백만원/);
+  assert.match(html, /대상고객 전체편익[\s\S]{0,240}만원/);
+  assert.doesNotMatch(html, /대상고객 전체편익[\s\S]{0,240}백만원/);
 });

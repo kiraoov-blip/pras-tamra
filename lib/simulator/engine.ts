@@ -13,7 +13,7 @@ import {
   type ReferenceSeason,
 } from "./reference-data.generated";
 
-export const ENGINE_VERSION = "2.3.0-ev-scenario-rebuild";
+export const ENGINE_VERSION = "2.4.0-demand-response-rate";
 
 type BaseCustomerType = Exclude<CustomerTypeCode, "EV_TOTAL">;
 type Components = Array<{ type: BaseCustomerType; weight: number }>;
@@ -138,9 +138,9 @@ function emptyApplianceRecord(): Record<ApplianceCode, number> {
   return Object.fromEntries(SELECTABLE_APPLIANCES.map(({ code }) => [code, 0])) as Record<ApplianceCode, number>;
 }
 
-function applianceRealizationRate(input: SimulationInput, code: ApplianceCode): number {
-  const configured = input.applianceShiftRates?.[code] ?? input.shiftRate;
-  return Math.max(0, Math.min(1, configured));
+function applianceSettingRate(input: SimulationInput, code: ApplianceCode): number {
+  const applianceRate = input.applianceShiftRates?.[code] ?? 1;
+  return Math.max(0, Math.min(1, applianceRate));
 }
 
 function applianceMaximumShares(events: readonly SelectedEvent[]): Record<ApplianceCode, number> {
@@ -222,7 +222,7 @@ function residentialApplianceScenario(
       .filter(({ hour, kwh }) => !eventSet.has(hour) && kwh > 0)
       .sort((left, right) => right.rate - left.rate || right.hour - left.hour);
     let remaining = sourceHours.reduce((sum, item) => sum + item.kwh, 0)
-      * applianceRealizationRate(input, code);
+      * applianceSettingRate(input, code);
     let applianceMoved = 0;
     sourceHours.forEach(({ hour, kwh }) => {
       const removed = Math.min(kwh, remaining);
@@ -241,7 +241,9 @@ function residentialApplianceScenario(
     movedKwh -= correction;
     eventHours.forEach((destination) => { shifted[destination] -= correction / eventHours.length; });
   });
-  return { base, shifted, movedKwh: Math.max(0, movedKwh) };
+  const responseRate = Math.max(0, Math.min(1, input.shiftRate));
+  const responseShifted = shifted.map((value, hour) => base[hour] + (value - base[hour]) * responseRate);
+  return { base, shifted: responseShifted, movedKwh: Math.max(0, movedKwh) * responseRate };
 }
 
 function moveEnergy(
@@ -378,9 +380,8 @@ function currentBill(type: BaseCustomerType, year: AnalysisYear): number {
 export function validateSimulationInput(input: SimulationInput): string[] {
   const errors: string[] = [];
   if (!Number.isFinite(input.customerCount) || input.customerCount < 1) errors.push("대상 고객 수는 1 이상이어야 합니다.");
-  if (!Number.isFinite(input.participationRate) || input.participationRate < 0 || input.participationRate > 1) errors.push("참여율은 0과 1 사이여야 합니다.");
   if (!Number.isFinite(input.discountRate) || input.discountRate < 0 || input.discountRate > 1) errors.push("할인율은 0과 1 사이여야 합니다.");
-  if (!Number.isFinite(input.shiftRate) || input.shiftRate < 0 || input.shiftRate > 1) errors.push("부하이전율은 0과 1 사이여야 합니다.");
+  if (!Number.isFinite(input.shiftRate) || input.shiftRate < 0 || input.shiftRate > 1) errors.push("수요이전율은 0과 1 사이여야 합니다.");
   if (input.applianceShiftRates && Object.values(input.applianceShiftRates).some(
     (value) => value !== undefined && (!Number.isFinite(value) || value < 0 || value > 1),
   )) errors.push("가전별 이전 설정률은 0과 1 사이여야 합니다.");
@@ -398,12 +399,12 @@ export function runSimulation(input: SimulationInput): SimulationResult {
   const maximumShares = applianceMaximumShares(events);
   const configuredShares = Object.fromEntries(SELECTABLE_APPLIANCES.map(({ code }) => [
     code,
-    selectedCodes.has(code) ? maximumShares[code] * applianceRealizationRate(input, code) : 0,
+    selectedCodes.has(code) ? maximumShares[code] * applianceSettingRate(input, code) * input.shiftRate : 0,
   ])) as Record<ApplianceCode, number>;
   const selectedApplianceShare = input.shiftMode === "RES_SCENARIO_2" && input.customerType === "RESIDENTIAL_TOU"
     ? Object.values(configuredShares).reduce((sum, value) => sum + value, 0)
     : 1;
-  const participatingCustomers = Math.round(input.customerCount * input.participationRate);
+  const targetCustomers = Math.round(input.customerCount);
   const monthlyEventDays = Array.from({ length: 12 }, () => 0);
   events.forEach((event) => { monthlyEventDays[event.month - 1] += 1; });
   const evChargingEventDays = input.shiftMode === "EV_SCENARIO_2_1"
@@ -456,11 +457,11 @@ export function runSimulation(input: SimulationInput): SimulationResult {
     });
   }
 
-  const shiftedEnergyMwh = movedKwhPerCustomer * participatingCustomers / 1_000;
-  const totalBenefit = benefitPerCustomer * participatingCustomers;
-  const currentSales = annualCurrentBill * participatingCustomers;
+  const shiftedEnergyMwh = movedKwhPerCustomer * targetCustomers / 1_000;
+  const totalBenefit = benefitPerCustomer * targetCustomers;
+  const currentSales = annualCurrentBill * targetCustomers;
   const salesChange = -totalBenefit;
-  const smpCostChange = smpCostChangePerCustomer * participatingCustomers;
+  const smpCostChange = smpCostChangePerCustomer * targetCustomers;
 
   if (input.shiftMode === "RES_SCENARIO_2" && input.customerType === "RESIDENTIAL_TOU" && selectedApplianceCount === 0) {
     warnings.push("선택된 가전이 없어 할인 효과만 계산하고 부하이전량은 0으로 계산했습니다.");
@@ -493,6 +494,7 @@ export function runSimulation(input: SimulationInput): SimulationResult {
   if (input.analysisYear === 2026) {
     warnings.push("2026년은 5월 15일까지의 YTD 발령자료와 5개월 기본요금을 적용했습니다.");
   }
+  warnings.push("할인은 대상 고객 전체의 발령시간대 사용량에 적용하며, 수요이전율은 이전 가능한 부하 중 실제로 발령시간대로 이동하는 비율입니다.");
   warnings.push("출력제어 회피 가능량은 발령시간 부하 증가량의 85%가 실제 출력제어를 대체한다는 가정값입니다.");
 
   return {
@@ -500,7 +502,7 @@ export function runSimulation(input: SimulationInput): SimulationResult {
     eventDays: events.length,
     eventHours: events.reduce((sum, event) => sum + event.hours.length, 0),
     evChargingEventDays,
-    participatingCustomers,
+    targetCustomers,
     selectedApplianceCount,
     selectableApplianceCount: SELECTABLE_APPLIANCES.length,
     selectedApplianceShare,

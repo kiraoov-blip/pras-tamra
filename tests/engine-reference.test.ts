@@ -60,6 +60,20 @@ test("할인만 적용한 기준점과 수정된 기본요금 포함 청구액�
   assert.equal(scenarioOne.utility.smpPurchaseCostChangeWon, 0);
 });
 
+test("대상 고객 수는 줄이지 않고 수요이전율만 이전 가능한 부하에 적용한다", () => {
+  const noResponse = simulate({ customerCount: 1_200, shiftMode: "SCENARIO_1", shiftRate: 0 });
+  const halfResponse = simulate({ customerCount: 1_200, shiftMode: "SCENARIO_1", shiftRate: 0.5 });
+  const fullResponse = simulate({ customerCount: 1_200, shiftMode: "SCENARIO_1", shiftRate: 1 });
+
+  assert.equal(noResponse.targetCustomers, 1_200);
+  assert.equal(halfResponse.targetCustomers, 1_200);
+  assert.equal(fullResponse.targetCustomers, 1_200);
+  nearly(noResponse.customer.totalAnnualBenefitWon, noResponse.customer.annualBenefitPerCustomerWon * 1_200);
+  nearly(halfResponse.grid.shiftedEnergyMwh * 2, fullResponse.grid.shiftedEnergyMwh, 1e-9);
+  assert.equal(noResponse.grid.shiftedEnergyMwh, 0);
+  assert.ok(noResponse.customer.annualBenefitPerCustomerWon > 0, "수요이전율 0%에서도 발령시간대 전체 사용량 할인은 유지되어야 함");
+});
+
 test("시나리오 1은 1% 입력에 연속 반응하고 최대부하 여섯 시간 이내에서 에너지를 보존한다", () => {
   const at10 = simulate({ shiftMode: "SCENARIO_1", shiftRate: 0.1 });
   const at11 = simulate({ shiftMode: "SCENARIO_1", shiftRate: 0.11 });
@@ -92,11 +106,13 @@ test("가전별 이전비중은 최대치에서 0까지 독립적으로 조절�
   const zeroRates = Object.fromEntries(ALL_APPLIANCE_CODES.map((code) => [code, 0]));
   const maximum = simulate({
     shiftMode: "RES_SCENARIO_2",
+    shiftRate: 1,
     selectedAppliances: [...ALL_APPLIANCE_CODES],
     applianceShiftRates: fullRates,
   });
   const none = simulate({
     shiftMode: "RES_SCENARIO_2",
+    shiftRate: 1,
     selectedAppliances: [...ALL_APPLIANCE_CODES],
     applianceShiftRates: zeroRates,
   });
@@ -106,6 +122,14 @@ test("가전별 이전비중은 최대치에서 0까지 독립적으로 조절�
   assert.ok(maximum.grid.shiftedEnergyMwh > none.grid.shiftedEnergyMwh);
   assert.equal(maximum.applianceMaximumShares.LIVING_ROOM_AC, 0);
   assert.ok(maximum.applianceMaximumShares.ROBOT_VACUUM > 0);
+
+  const halfResponse = simulate({
+    shiftMode: "RES_SCENARIO_2",
+    shiftRate: 0.5,
+    selectedAppliances: [...ALL_APPLIANCE_CODES],
+    applianceShiftRates: fullRates,
+  });
+  nearly(halfResponse.grid.shiftedEnergyMwh * 2, maximum.grid.shiftedEnergyMwh, 1e-9);
 });
 
 test("EV 2-1과 2-2는 완속·급속을 모두 계산하고 충전빈도를 구분한다", () => {

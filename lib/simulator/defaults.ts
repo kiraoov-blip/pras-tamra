@@ -14,7 +14,6 @@ export const DEFAULT_SIMULATION_INPUT: SimulationInput = {
   dayTypeFilter: "ALL",
   customerType: "RESIDENTIAL_TOU",
   customerCount: 1200,
-  participationRate: 0.8,
   discountRate: 0.5,
   shiftRate: 0.5,
   shiftMode: "SCENARIO_1",
