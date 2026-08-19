@@ -1,6 +1,13 @@
 import type { EventRule, SimulationInput } from "./types";
 import { ALL_APPLIANCE_CODES } from "./appliances";
 
+export const DEFAULT_CUSTOMER_COUNTS = {
+  RESIDENTIAL_TOU: 1_200,
+  EV_TOTAL: 18_327,
+  EV_SLOW_LOW_VOLTAGE: 18_327,
+  EV_FAST_HIGH_VOLTAGE: 18_327,
+} as const;
+
 export const DEFAULT_EVENT_RULE: EventRule = {
   mode: "ACTUAL",
   startHour: 10,
@@ -13,7 +20,7 @@ export const DEFAULT_SIMULATION_INPUT: SimulationInput = {
   seasonFilter: "ALL",
   dayTypeFilter: "ALL",
   customerType: "RESIDENTIAL_TOU",
-  customerCount: 1200,
+  customerCount: DEFAULT_CUSTOMER_COUNTS.RESIDENTIAL_TOU,
   discountRate: 0.5,
   shiftRate: 0.5,
   shiftMode: "SCENARIO_1",

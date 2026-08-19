@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { REFERENCE_MONTHLY_USAGE_KWH } from "@/lib/simulator/defaults";
+import { DEFAULT_CUSTOMER_COUNTS, REFERENCE_MONTHLY_USAGE_KWH } from "@/lib/simulator/defaults";
 import { EV_CONTRACT_POWER_THRESHOLD_KW, EV_REPRESENTATIVE_BASIS, runSimulation } from "@/lib/simulator/engine";
 import { ALL_APPLIANCE_CODES, SELECTABLE_APPLIANCES } from "@/lib/simulator/appliances";
 import type { AnalysisDayType, AnalysisSeason, AnalysisYear, ApplianceCode, CustomerTypeCode, EventMode, LoadShiftMode } from "@/lib/simulator/types";
@@ -69,7 +69,7 @@ export default function Home() {
   const [seasonFilter, setSeasonFilter] = useState<AnalysisSeason>("ALL");
   const [dayTypeFilter, setDayTypeFilter] = useState<AnalysisDayType>("ALL");
   const [customerType, setCustomerType] = useState<CustomerType>("주택용 TOU");
-  const [customerCount, setCustomerCount] = useState(1200);
+  const [customerCount, setCustomerCount] = useState<number>(DEFAULT_CUSTOMER_COUNTS.RESIDENTIAL_TOU);
   const [discount, setDiscount] = useState(50);
   const [shiftRate, setShiftRate] = useState(50);
   const [scenario, setScenario] = useState<LoadShiftMode>("SCENARIO_1");
@@ -182,7 +182,7 @@ export default function Home() {
 
   const reset = () => {
     setAnalysisYear(2025); setSeasonFilter("ALL"); setDayTypeFilter("ALL");
-    setCustomerType("주택용 TOU"); setCustomerCount(1200);
+    setCustomerType("주택용 TOU"); setCustomerCount(DEFAULT_CUSTOMER_COUNTS.RESIDENTIAL_TOU);
     setDiscount(50); setShiftRate(50); setScenario("SCENARIO_1");
     setSelectedAppliances([...ALL_APPLIANCE_CODES]);
     setApplianceShiftRates({ ...FULL_APPLIANCE_RATES });
@@ -192,6 +192,7 @@ export default function Home() {
 
   const changeCustomerType = (value: CustomerType) => {
     setCustomerType(value);
+    setCustomerCount(DEFAULT_CUSTOMER_COUNTS[CUSTOMER_CODES[value]]);
     setScenario("SCENARIO_1");
   };
 
@@ -241,6 +242,8 @@ export default function Home() {
       </header>
 
       <div className="page-shell workspace">
+        <div className="dashboard-layout">
+          <aside className="control-rail" aria-label="분석조건 및 부하이전 시나리오">
         <section className="section-card settings-card">
           <div className="section-heading"><div><p>01 · INPUT</p><h2>분석 조건</h2></div><button className="text-button" onClick={reset}>기본값으로 초기화</button></div>
           <div className="settings-grid">
@@ -341,6 +344,9 @@ export default function Home() {
             <p className="appliance-note">가전별 최대 비중은 {scopeLabel}의 선택 발령일에서 발령시간 밖에 존재하는 13개 가전의 최대 이전가능량 합계를 100%로 환산한 구성비입니다. 각 가전 설정값에 공통 수요이전율을 곱하며, 수요이전율 0%에서는 모든 가전이 반응하지 않습니다.</p>
           </div> : null}
         </section>
+          </aside>
+
+          <div className="results-pane">
 
         <section className="metric-grid" aria-label="분석 핵심 지표">
           <article className="metric-card accent-blue"><p>발령일수</p><strong>{formatInteger(result.eventDays)}<small>일</small></strong><span>{scopeLabel}</span></article>
@@ -409,7 +415,6 @@ export default function Home() {
             <div className="result-tabs" role="tablist" aria-label="분석 관점 선택">{(["고객", "한전", "계통"] as ResultTab[]).map((tab) => <button key={tab} className={resultTab === tab ? "active" : ""} onClick={() => setResultTab(tab)} role="tab" aria-selected={resultTab === tab}>{tab}</button>)}</div>
             <div className="result-intro"><p>{activeResult.eyebrow}</p><h2>{activeResult.title}</h2></div>
             <div className="result-list">{activeResult.items.map(([label, value]) => <div key={label}><span>{label}</span><strong className="calculated">{value}</strong></div>)}</div>
-            <div className="engine-notice connected"><span>계산엔진 연결 상태</span><strong><StatusDot tone="green" /> 정상</strong><small>시간대별 검산 엔진 {result.engineVersion}{result.warnings.length ? ` · 검토사항 ${result.warnings.length}건` : " · 검산 완료"}</small></div>
           </article>
         </section>
 
@@ -421,6 +426,8 @@ export default function Home() {
         </section>
 
         <section className="method-strip"><div><span>1</span><p><strong>발령조건 판정</strong>SMP·시간대 기준</p></div><i>→</i><div><span>2</span><p><strong>할인 적용</strong>중복할인 우선순위</p></div><i>→</i><div><span>3</span><p><strong>부하 재배분</strong>에너지 총량 보존</p></div><i>→</i><div><span>4</span><p><strong>편익 산정</strong>고객·한전·계통</p></div></section>
+          </div>
+        </div>
       </div>
 
       <footer><div className="page-shell footer-inner"><span>PRAS · 탐라는 전기예보제</span><p>시간대별 부하·요금·SMP 재계산 엔진 · 출력제어 회피율 85% 가정</p></div></footer>

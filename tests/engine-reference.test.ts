@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DEFAULT_SIMULATION_INPUT } from "../lib/simulator/defaults.ts";
+import { DEFAULT_CUSTOMER_COUNTS, DEFAULT_SIMULATION_INPUT } from "../lib/simulator/defaults.ts";
 import { EV_TOTAL_FAST_WEIGHT, EV_TOTAL_SLOW_WEIGHT, runSimulation } from "../lib/simulator/engine.ts";
 import { ALL_APPLIANCE_CODES } from "../lib/simulator/appliances.ts";
 import type { SimulationInput } from "../lib/simulator/types.ts";
@@ -29,6 +29,13 @@ test("2025 실적 발령구간과 SMP 자동판정 시간을 서로 구분한다
   assert.equal(rule.eventDays, 56);
   assert.equal(rule.eventHours, 150);
   assert.equal(sum(actual.monthlyEventDays), 56);
+});
+
+test("고객유형별 초기 대상 고객 수를 적용한다", () => {
+  assert.equal(DEFAULT_CUSTOMER_COUNTS.RESIDENTIAL_TOU, 1_200);
+  assert.equal(DEFAULT_CUSTOMER_COUNTS.EV_TOTAL, 18_327);
+  assert.equal(DEFAULT_CUSTOMER_COUNTS.EV_SLOW_LOW_VOLTAGE, 18_327);
+  assert.equal(DEFAULT_CUSTOMER_COUNTS.EV_FAST_HIGH_VOLTAGE, 18_327);
 });
 
 test("계절·요일 전체 선택은 연간 결과를 유지하고 세부 선택은 해당 발령일만 필터링한다", () => {
