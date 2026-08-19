@@ -68,6 +68,15 @@ export interface UtilityResult {
   shortTermNetImpactWon: number;
 }
 
+export interface RevenueNeutralDiscountResult {
+  /** 0.1%p 단위로 선택된 발령시간 할인율(0-1). */
+  discountRate: number;
+  /** 선택 할인율 적용 후 단기 순재무영향. */
+  shortTermNetImpactWon: number;
+  /** 0-100% 범위 안에서 이론상 매출중립점이 존재하는지 여부. */
+  neutralPointWithinRange: boolean;
+}
+
 export interface GridResult {
   shiftedEnergyMwh: number;
   eventWindowLoadIncreaseMwh: number;

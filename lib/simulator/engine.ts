@@ -2,6 +2,7 @@ import type {
   AnalysisYear,
   ApplianceCode,
   CustomerTypeCode,
+  RevenueNeutralDiscountResult,
   SimulationInput,
   SimulationResult,
 } from "./types";
@@ -13,7 +14,7 @@ import {
   type ReferenceSeason,
 } from "./reference-data.generated";
 
-export const ENGINE_VERSION = "2.4.0-demand-response-rate";
+export const ENGINE_VERSION = "2.5.0-revenue-neutral-rate";
 
 type BaseCustomerType = Exclude<CustomerTypeCode, "EV_TOTAL">;
 type Components = Array<{ type: BaseCustomerType; weight: number }>;
@@ -530,5 +531,51 @@ export function runSimulation(input: SimulationInput): SimulationResult {
       curtailmentReductionMwh: shiftedEnergyMwh * CURTAILMENT_AVOIDANCE_FACTOR,
     },
     warnings,
+  };
+}
+
+/**
+ * 현재 분석조건에서 한전의 단기 순재무영향이 0원에 가장 가까워지는
+ * 발령시간 할인율을 0.1%p 단위로 산정한다.
+ *
+ * 할인율은 판매수입 변화에 선형으로 작용하고 SMP 구입비 변화에는
+ * 영향을 주지 않으므로 0%와 100% 결과로 이론 중립점을 계산한 뒤,
+ * 화면에 적용 가능한 0.1%p 후보 중 절대 잔여 영향이 최소인 값을 선택한다.
+ */
+export function findRevenueNeutralDiscount(input: SimulationInput): RevenueNeutralDiscountResult {
+  const impactAt = (discountRate: number) => runSimulation({
+    ...input,
+    discountRate,
+  }).utility.shortTermNetImpactWon;
+
+  const impactAtZero = impactAt(0);
+  const impactAtFull = impactAt(1);
+  const slope = impactAtFull - impactAtZero;
+  const hasDiscountSensitivity = Math.abs(slope) >= 1e-9;
+  const rawNeutralRate = hasDiscountSensitivity ? -impactAtZero / slope : 0;
+  const neutralPointWithinRange = hasDiscountSensitivity
+    ? rawNeutralRate >= 0 && rawNeutralRate <= 1
+    : Math.abs(impactAtZero) < 0.5;
+  const clampedRate = Math.max(0, Math.min(1, rawNeutralRate));
+  const roundedRate = Math.round(clampedRate * 1_000) / 1_000;
+  const candidateRates = [...new Set([
+    0,
+    1,
+    roundedRate,
+    Math.max(0, roundedRate - 0.001),
+    Math.min(1, roundedRate + 0.001),
+  ])];
+
+  const best = candidateRates
+    .map((discountRate) => ({ discountRate, shortTermNetImpactWon: impactAt(discountRate) }))
+    .sort((left, right) => (
+      Math.abs(left.shortTermNetImpactWon) - Math.abs(right.shortTermNetImpactWon)
+      || left.discountRate - right.discountRate
+    ))[0];
+
+  return {
+    discountRate: best.discountRate,
+    shortTermNetImpactWon: best.shortTermNetImpactWon,
+    neutralPointWithinRange,
   };
 }

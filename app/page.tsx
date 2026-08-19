@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_CUSTOMER_COUNTS, REFERENCE_MONTHLY_USAGE_KWH } from "@/lib/simulator/defaults";
-import { EV_CONTRACT_POWER_THRESHOLD_KW, EV_REPRESENTATIVE_BASIS, runSimulation } from "@/lib/simulator/engine";
+import { EV_CONTRACT_POWER_THRESHOLD_KW, EV_REPRESENTATIVE_BASIS, findRevenueNeutralDiscount, runSimulation } from "@/lib/simulator/engine";
 import { ALL_APPLIANCE_CODES, SELECTABLE_APPLIANCES } from "@/lib/simulator/appliances";
-import type { AnalysisDayType, AnalysisSeason, AnalysisYear, ApplianceCode, CustomerTypeCode, EventMode, LoadShiftMode } from "@/lib/simulator/types";
+import type { AnalysisDayType, AnalysisSeason, AnalysisYear, ApplianceCode, CustomerTypeCode, EventMode, LoadShiftMode, RevenueNeutralDiscountResult, SimulationInput } from "@/lib/simulator/types";
 
 type CustomerType = "주택용 TOU" | "전기차 전체" | "전기차 완속(50kW 미만)" | "전기차 급속(50kW 이상)";
 type ResultTab = "고객" | "한전" | "계통";
@@ -56,6 +56,10 @@ function clampPercent(value: number) {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
 
+function clampOneDecimalPercent(value: number) {
+  return Math.max(0, Math.min(100, Math.round(value * 10) / 10));
+}
+
 function FieldLabel({ children, hint }: { children: React.ReactNode; hint?: string }) {
   return <div className="field-label"><span>{children}</span>{hint ? <small>{hint}</small> : null}</div>;
 }
@@ -83,6 +87,7 @@ export default function Home() {
   const [resultTab, setResultTab] = useState<ResultTab>("고객");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [hoveredHour, setHoveredHour] = useState<number | null>(null);
+  const [neutralDiscountResult, setNeutralDiscountResult] = useState<RevenueNeutralDiscountResult | null>(null);
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [chartWidth, setChartWidth] = useState(MAX_CHART_WIDTH);
 
@@ -105,7 +110,7 @@ export default function Home() {
       : customerCode === "EV_FAST_HIGH_VOLTAGE"
         ? `${EV_CONTRACT_POWER_THRESHOLD_KW}kW 이상`
         : "-";
-  const result = useMemo(() => runSimulation({
+  const simulationInput = useMemo<SimulationInput>(() => ({
     analysisYear,
     seasonFilter,
     dayTypeFilter,
@@ -124,6 +129,7 @@ export default function Home() {
       smpThresholdWonPerKwh: smpThreshold,
     },
   }), [analysisYear, seasonFilter, dayTypeFilter, customerCode, customerCount, discount, shiftRate, scenario, selectedAppliances, applianceShiftRates, weekendPriority, eventMode, startHour, endHour, smpThreshold]);
+  const result = useMemo(() => runSimulation(simulationInput), [simulationInput]);
 
   const maxProfile = Math.max(...result.baseLoadProfile, ...result.shiftedLoadProfile) * 1.08;
   const averageEventHours = result.eventDays ? result.eventHours / result.eventDays : 0;
@@ -179,6 +185,16 @@ export default function Home() {
     },
   };
   const activeResult = resultCopy[resultTab];
+  const neutralResultIsCurrent = neutralDiscountResult !== null
+    && Math.abs(discount / 100 - neutralDiscountResult.discountRate) < 1e-9
+    && Math.abs(result.utility.shortTermNetImpactWon - neutralDiscountResult.shortTermNetImpactWon) < 0.5;
+
+  const applyRevenueNeutralDiscount = () => {
+    const neutral = findRevenueNeutralDiscount(simulationInput);
+    setDiscount(Number((neutral.discountRate * 100).toFixed(1)));
+    setNeutralDiscountResult(neutral);
+    setResultTab("한전");
+  };
 
   const reset = () => {
     setAnalysisYear(2025); setSeasonFilter("ALL"); setDayTypeFilter("ALL");
@@ -188,6 +204,7 @@ export default function Home() {
     setApplianceShiftRates({ ...FULL_APPLIANCE_RATES });
     setWeekendPriority(true); setEventMode("ACTUAL"); setSmpThreshold(0);
     setStartHour(10); setEndHour(16);
+    setNeutralDiscountResult(null);
   };
 
   const changeCustomerType = (value: CustomerType) => {
@@ -257,7 +274,28 @@ export default function Home() {
             }} /></label>
             <label className="control-field"><FieldLabel hint="월">기준 사용량</FieldLabel><div className="unit-input"><input value={formatOneDecimal(monthlyUsage)} readOnly /><span>kWh</span></div></label>
             {customerCode !== "RESIDENTIAL_TOU" ? <label className="control-field"><FieldLabel>계약전력 구분</FieldLabel><div className="unit-input"><input value={contractPowerBasis} readOnly /></div></label> : null}
-            <label className="control-field range-field"><FieldLabel hint={`${discount}%`}>발령시간 할인율</FieldLabel><input type="range" min="0" max="100" step="5" value={discount} onChange={(event) => setDiscount(Number(event.target.value))} /></label>
+            <div className="control-field range-field discount-field">
+              <FieldLabel hint={`${discount.toFixed(1)}%`}>발령시간 할인율</FieldLabel>
+              <div className="discount-action-row">
+                <input aria-label="발령시간 할인율" type="range" min="0" max="100" step="0.1" value={discount} onChange={(event) => {
+                  setDiscount(Number(event.target.value));
+                  setNeutralDiscountResult(null);
+                }} />
+                <label className="discount-percent-entry">
+                  <input aria-label="발령시간 할인율 직접 입력" type="number" min="0" max="100" step="0.1" value={discount} onChange={(event) => {
+                    setDiscount(clampOneDecimalPercent(Number(event.target.value) || 0));
+                    setNeutralDiscountResult(null);
+                  }} />
+                  <span>%</span>
+                </label>
+                <button type="button" className="neutral-rate-button" onClick={applyRevenueNeutralDiscount}>한전 매출중립 할인율 계산</button>
+              </div>
+              <small className={`neutral-rate-note ${neutralResultIsCurrent ? "calculated" : ""}`} aria-live="polite">
+                {neutralResultIsCurrent && neutralDiscountResult
+                  ? `${formatOneDecimal(neutralDiscountResult.discountRate * 100)}% 적용 · ${neutralDiscountResult.neutralPointWithinRange ? "잔여 영향" : "0~100% 범위 최접값"} ${formatWon(neutralDiscountResult.shortTermNetImpactWon)}`
+                  : "전력판매수입 변화 − SMP 구입비 변화가 0원에 가장 가까운 0.1%p 할인율을 적용합니다."}
+              </small>
+            </div>
             <div className="control-field weekend-control"><FieldLabel>주말할인 중복처리</FieldLabel><button type="button" className={`toggle-row ${weekendPriority ? "active" : ""}`} onClick={() => setWeekendPriority((value) => !value)} aria-pressed={weekendPriority}><span className="toggle"><i /></span><span>{weekendPriority ? "기존 주말할인 우선" : "전기예보 할인 우선"}</span></button></div>
           </div>
           <button className="advanced-toggle" onClick={() => setAdvancedOpen((value) => !value)} aria-expanded={advancedOpen}><span>고급 발령조건</span><span>{advancedOpen ? "−" : "+"}</span></button>

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DEFAULT_CUSTOMER_COUNTS, DEFAULT_SIMULATION_INPUT } from "../lib/simulator/defaults.ts";
-import { EV_TOTAL_FAST_WEIGHT, EV_TOTAL_SLOW_WEIGHT, runSimulation } from "../lib/simulator/engine.ts";
+import { EV_TOTAL_FAST_WEIGHT, EV_TOTAL_SLOW_WEIGHT, findRevenueNeutralDiscount, runSimulation } from "../lib/simulator/engine.ts";
 import { ALL_APPLIANCE_CODES } from "../lib/simulator/appliances.ts";
 import type { SimulationInput } from "../lib/simulator/types.ts";
 
@@ -237,4 +237,38 @@ test("연도별 원자료와 2026 YTD 청구기간을 적용한다", () => {
   assert.equal(y2026.eventDays, 39);
   assert.equal(y2026.eventHours, 100);
   assert.ok(y2026.customer.currentAnnualBillWon < y2024.customer.currentAnnualBillWon);
+});
+
+test("한전 매출중립 할인율은 0.1%p 단위에서 단기 순재무영향을 최소화한다", () => {
+  const input = {
+    ...DEFAULT_SIMULATION_INPUT,
+    shiftRate: 0.5,
+  };
+  const neutral = findRevenueNeutralDiscount(input);
+  const rateStep = neutral.discountRate * 1_000;
+  nearly(rateStep, Math.round(rateStep), 1e-9);
+  assert.ok(neutral.neutralPointWithinRange);
+
+  const selectedImpact = Math.abs(runSimulation({
+    ...input,
+    discountRate: neutral.discountRate,
+  }).utility.shortTermNetImpactWon);
+  const adjacentRates = [
+    Math.max(0, neutral.discountRate - 0.001),
+    Math.min(1, neutral.discountRate + 0.001),
+  ];
+  adjacentRates.forEach((discountRate) => {
+    const adjacentImpact = Math.abs(runSimulation({ ...input, discountRate }).utility.shortTermNetImpactWon);
+    assert.ok(selectedImpact <= adjacentImpact + 1e-6);
+  });
+});
+
+test("부하이전과 할인이 모두 없으면 0.0%가 정확한 매출중립 할인율이다", () => {
+  const neutral = findRevenueNeutralDiscount({
+    ...DEFAULT_SIMULATION_INPUT,
+    shiftRate: 0,
+  });
+  assert.equal(neutral.discountRate, 0);
+  nearly(neutral.shortTermNetImpactWon, 0, 1e-9);
+  assert.ok(neutral.neutralPointWithinRange);
 });
