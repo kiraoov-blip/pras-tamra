@@ -327,7 +327,7 @@ export default function Home() {
           <article className="metric-card"><p>총 발령시간</p><strong>{formatOneDecimal(result.eventHours)}<small>시간</small></strong><span>일평균 {averageEventHours.toFixed(1)}시간</span></article>
           <article className="metric-card"><p>참여 고객</p><strong>{formatInteger(result.participatingCustomers)}<small>호</small></strong><span>전체의 {participation}%</span></article>
           <article className="metric-card accent-green"><p>부하 이전량</p><strong>{formatOneDecimal(result.grid.shiftedEnergyMwh)}<small>MWh</small></strong><span>에너지 총량 보존</span></article>
-          <article className="metric-card"><p>고객당 기준기간 편익</p><strong>{formatInteger(result.customer.annualBenefitPerCustomerWon / 10_000)}<small>만원</small></strong><span>할인 및 부하이전 반영</span></article>
+          <article className="metric-card"><p>고객당 기준기간 편익</p><strong>{formatInteger(result.customer.annualBenefitPerCustomerWon)}<small>원</small></strong><span>할인 및 부하이전 반영</span></article>
           <article className="metric-card accent-blue"><p>참여고객 전체편익</p><strong>{formatMillionWon(result.customer.totalAnnualBenefitWon)}<small>백만원</small></strong><span>참여 고객 합계</span></article>
         </section>
 
