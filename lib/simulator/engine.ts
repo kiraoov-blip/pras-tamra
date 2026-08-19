@@ -6,6 +6,7 @@ import type {
   SimulationResult,
 } from "./types";
 import { SELECTABLE_APPLIANCES } from "./appliances";
+import { REFERENCE_MONTHLY_USAGE_KWH } from "./defaults";
 import {
   REFERENCE_DATA,
   type ReferenceDayType,
@@ -13,7 +14,7 @@ import {
   type ReferenceSeason,
 } from "./reference-data.generated";
 
-export const ENGINE_VERSION = "2.2.0-season-day-filter";
+export const ENGINE_VERSION = "2.3.0-ev-unit-normalized";
 
 type BaseCustomerType = Exclude<CustomerTypeCode, "EV_TOTAL">;
 type Components = Array<{ type: BaseCustomerType; weight: number }>;
@@ -31,6 +32,12 @@ const EV_SLOW_USAGE = 1_949_025.8806533858;
 const EV_FAST_USAGE = 576_504.612;
 export const EV_TOTAL_SLOW_WEIGHT = EV_SLOW_USAGE / (EV_SLOW_USAGE + EV_FAST_USAGE);
 export const EV_TOTAL_FAST_WEIGHT = 1 - EV_TOTAL_SLOW_WEIGHT;
+
+const DAYS_PER_YEAR = 365;
+export const EV_TARGET_DAILY_USAGE_KWH = {
+  EV_SLOW_LOW_VOLTAGE: REFERENCE_MONTHLY_USAGE_KWH.EV_SLOW_LOW_VOLTAGE * 12 / DAYS_PER_YEAR,
+  EV_FAST_HIGH_VOLTAGE: REFERENCE_MONTHLY_USAGE_KWH.EV_FAST_HIGH_VOLTAGE * 12 / DAYS_PER_YEAR,
+} as const;
 
 const BASIC_CHARGE_MONTHLY_WON: Record<BaseCustomerType, number> = {
   RESIDENTIAL_TOU: 4_310,
@@ -158,7 +165,17 @@ function componentsFor(customerType: CustomerTypeCode): Components {
 }
 
 function copyProfile(type: BaseCustomerType, season: ReferenceSeason): number[] {
-  return [...LOAD_PROFILES[type][season]];
+  const profile = [...LOAD_PROFILES[type][season]];
+  if (type === "RESIDENTIAL_TOU") return profile;
+
+  // The EV source sheets provide a 24-hour shape whose total is 42 kWh/day
+  // (slow) or 50 kWh/day (fast). Those totals conflict with the workbook's
+  // monthly representative usage of 336/400 kWh. Preserve the hourly shape,
+  // but normalize its magnitude to the monthly usage converted to kWh/day.
+  const rawDailyUsageKwh = profile.reduce((sum, value) => sum + value, 0);
+  if (rawDailyUsageKwh <= 0) return profile;
+  const scale = EV_TARGET_DAILY_USAGE_KWH[type] / rawDailyUsageKwh;
+  return profile.map((value) => value * scale);
 }
 
 function distribute(shifted: number[], destinationHours: readonly number[], energy: number): void {

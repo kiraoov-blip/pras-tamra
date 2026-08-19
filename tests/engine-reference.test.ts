@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DEFAULT_SIMULATION_INPUT } from "../lib/simulator/defaults.ts";
-import { EV_TOTAL_FAST_WEIGHT, EV_TOTAL_SLOW_WEIGHT, runSimulation } from "../lib/simulator/engine.ts";
+import {
+  EV_TARGET_DAILY_USAGE_KWH,
+  EV_TOTAL_FAST_WEIGHT,
+  EV_TOTAL_SLOW_WEIGHT,
+  runSimulation,
+} from "../lib/simulator/engine.ts";
 import { ALL_APPLIANCE_CODES } from "../lib/simulator/appliances.ts";
 import type { SimulationInput } from "../lib/simulator/types.ts";
 
@@ -117,6 +122,28 @@ test("EV 2-1은 급속, 2-2는 완속 충전경로에만 부하이전을 적용�
   assert.ok(slow22.grid.shiftedEnergyMwh > 0);
   assert.ok(fast21.grid.shiftedEnergyMwh > 0);
   assert.equal(fast22.grid.shiftedEnergyMwh, 0);
+});
+
+test("EV 부하곡선은 월 336/400kWh 기준의 일평균 사용량으로 정규화한다", () => {
+  const slow = simulate({ customerType: "EV_SLOW_LOW_VOLTAGE", shiftMode: "SCENARIO_1" });
+  const fast = simulate({ customerType: "EV_FAST_HIGH_VOLTAGE", shiftMode: "SCENARIO_1" });
+  nearly(sum(slow.baseLoadProfile), EV_TARGET_DAILY_USAGE_KWH.EV_SLOW_LOW_VOLTAGE, 1e-9);
+  nearly(sum(fast.baseLoadProfile), EV_TARGET_DAILY_USAGE_KWH.EV_FAST_HIGH_VOLTAGE, 1e-9);
+});
+
+test("EV 전체 기본 예시는 단위 보정 후 결과를 재현한다", () => {
+  const corrected = simulate({
+    customerType: "EV_TOTAL",
+    customerCount: 10_000,
+    participationRate: 0.8,
+    shiftRate: 0.5,
+    shiftMode: "SCENARIO_1",
+  });
+  nearly(corrected.customer.annualBenefitPerCustomerWon, 6_100.953474587677);
+  nearly(corrected.customer.totalAnnualBenefitWon, 48_807_627.79670142);
+  nearly(corrected.grid.shiftedEnergyMwh, 429.68907526867787);
+  nearly(corrected.utility.smpPurchaseCostChangeWon, -50_599_630.44224127);
+  nearly(corrected.utility.shortTermNetImpactWon, 1_792_002.645539851);
 });
 
 test("EV 전체는 완속·급속 실적 비중을 합산한다", () => {
