@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_CUSTOMER_COUNTS, REFERENCE_MONTHLY_USAGE_KWH } from "@/lib/simulator/defaults";
 import { EV_CONTRACT_POWER_THRESHOLD_KW, EV_REPRESENTATIVE_BASIS, findRevenueNeutralDiscount, runSimulation } from "@/lib/simulator/engine";
 import { ALL_APPLIANCE_CODES, SELECTABLE_APPLIANCES } from "@/lib/simulator/appliances";
-import type { AnalysisDayType, AnalysisSeason, AnalysisYear, ApplianceCode, CustomerTypeCode, EventMode, LoadShiftMode, RevenueNeutralDiscountResult, SimulationInput } from "@/lib/simulator/types";
+import type { AnalysisDayType, AnalysisSeason, AnalysisYear, ApplianceCode, CustomerTypeCode, EventMode, EvTariffVoltage, LoadShiftMode, RevenueNeutralDiscountResult, SimulationInput } from "@/lib/simulator/types";
 
 type CustomerType = "주택용 TOU" | "전기차 전체" | "전기차 완속(50kW 미만)" | "전기차 급속(50kW 이상)";
 type ResultTab = "고객" | "한전" | "계통";
@@ -69,6 +69,7 @@ export default function Home() {
   const [seasonFilter, setSeasonFilter] = useState<AnalysisSeason>("ALL");
   const [dayTypeFilter, setDayTypeFilter] = useState<AnalysisDayType>("ALL");
   const [customerType, setCustomerType] = useState<CustomerType>("주택용 TOU");
+  const [evTariffVoltage, setEvTariffVoltage] = useState<EvTariffVoltage>("AUTO");
   const [customerCount, setCustomerCount] = useState<number>(DEFAULT_CUSTOMER_COUNTS.RESIDENTIAL_TOU);
   const [discount, setDiscount] = useState(50);
   const [shiftRate, setShiftRate] = useState(50);
@@ -111,6 +112,7 @@ export default function Home() {
     seasonFilter,
     dayTypeFilter,
     customerType: customerCode,
+    evTariffVoltage,
     customerCount,
     discountRate: discount / 100,
     shiftRate: shiftRate / 100,
@@ -124,7 +126,7 @@ export default function Home() {
       endHour,
       smpThresholdWonPerKwh: smpThreshold,
     },
-  }), [analysisYear, seasonFilter, dayTypeFilter, customerCode, customerCount, discount, shiftRate, scenario, selectedAppliances, applianceShiftRates, weekendPriority, eventMode, startHour, endHour, smpThreshold]);
+  }), [analysisYear, seasonFilter, dayTypeFilter, customerCode, evTariffVoltage, customerCount, discount, shiftRate, scenario, selectedAppliances, applianceShiftRates, weekendPriority, eventMode, startHour, endHour, smpThreshold]);
   const result = useMemo(() => runSimulation(simulationInput), [simulationInput]);
 
   const maxProfile = Math.max(...result.baseLoadProfile, ...result.shiftedLoadProfile) * 1.08;
@@ -195,6 +197,7 @@ export default function Home() {
   const reset = () => {
     setAnalysisYear(2025); setSeasonFilter("ALL"); setDayTypeFilter("ALL");
     setCustomerType("주택용 TOU"); setCustomerCount(DEFAULT_CUSTOMER_COUNTS.RESIDENTIAL_TOU);
+    setEvTariffVoltage("AUTO");
     setDiscount(50); setShiftRate(50); setScenario("SCENARIO_1");
     setSelectedAppliances([...ALL_APPLIANCE_CODES]);
     setApplianceShiftRates({ ...FULL_APPLIANCE_RATES });
@@ -270,6 +273,7 @@ export default function Home() {
             }} /></label>
             <label className="control-field"><FieldLabel hint="월">기준 사용량</FieldLabel><div className="unit-input"><input value={formatOneDecimal(monthlyUsage)} readOnly /><span>kWh</span></div></label>
             {customerCode !== "RESIDENTIAL_TOU" ? <label className="control-field"><FieldLabel>계약전력 구분</FieldLabel><div className="unit-input"><input value={contractPowerBasis} readOnly /></div></label> : null}
+            {customerCode !== "RESIDENTIAL_TOU" ? <label className="control-field"><FieldLabel hint="충전방식과 별도">공급전압 요금종별</FieldLabel><select value={evTariffVoltage} onChange={(event) => setEvTariffVoltage(event.target.value as EvTariffVoltage)}><option value="AUTO">자동(완속 저압·급속 고압)</option><option value="LOW">저압</option><option value="HIGH">고압</option></select></label> : null}
             <div className="control-field range-field discount-field">
               <FieldLabel hint={`${discount.toFixed(1)}%`}>발령시간 할인율</FieldLabel>
               <div className="discount-action-row">
