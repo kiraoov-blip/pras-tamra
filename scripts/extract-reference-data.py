@@ -35,6 +35,14 @@ APPLIANCE_NAMES = {
 
 SEASON_MAP = {"봄가을": "SHOULDER", "여름": "SUMMER", "겨울": "WINTER"}
 WEEKDAY_MAP = {"토": "SATURDAY", "일": "HOLIDAY"}
+DAY_TYPE_OVERRIDES = {
+    # KEPCO EV tariff excludes temporary public holidays from holiday pricing.
+    "2025/01/27": "WEEKDAY",
+    # Statutory holidays present in the 2026 YTD event rows.
+    "2026/02/17": "HOLIDAY",
+    "2026/02/18": "HOLIDAY",
+    "2026/05/05": "HOLIDAY",
+}
 
 
 def compact(value: float) -> float:
@@ -129,7 +137,10 @@ def read_events():
             season_ko = "여름" if date.month in (6, 7, 8) else "겨울" if date.month in (11, 12, 1, 2) else "봄가을"
         weekday_ko = base.cell(row, 3).value
         calendar_day_type = "SATURDAY" if date.weekday() == 5 else "HOLIDAY" if date.weekday() == 6 else "WEEKDAY"
-        day_type = master_day_type.get(raw_date, WEEKDAY_MAP.get(weekday_ko, calendar_day_type))
+        day_type = DAY_TYPE_OVERRIDES.get(
+            raw_date,
+            master_day_type.get(raw_date, WEEKDAY_MAP.get(weekday_ko, calendar_day_type)),
+        )
         events[str(date.year)].append({
             "date": date.strftime("%Y-%m-%d"),
             "month": date.month,
