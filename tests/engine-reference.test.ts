@@ -1,8 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DEFAULT_CUSTOMER_COUNTS, DEFAULT_SIMULATION_INPUT } from "../lib/simulator/defaults.ts";
-import { EV_TOTAL_FAST_WEIGHT, EV_TOTAL_SLOW_WEIGHT, findRevenueNeutralDiscount, runSimulation } from "../lib/simulator/engine.ts";
+import {
+  EV_BASIC_CHARGE_WON_PER_KW,
+  EV_ENERGY_RATE_TABLE,
+  EV_TOTAL_FAST_WEIGHT,
+  EV_TOTAL_SLOW_WEIGHT,
+  findRevenueNeutralDiscount,
+  getEvTariffRates,
+  runSimulation,
+} from "../lib/simulator/engine.ts";
 import { ALL_APPLIANCE_CODES } from "../lib/simulator/appliances.ts";
+import { REFERENCE_DATA } from "../lib/simulator/reference-data.generated.ts";
 import type { SimulationInput } from "../lib/simulator/types.ts";
 
 function simulate(overrides: Partial<SimulationInput> = {}) {
@@ -56,15 +65,58 @@ test("계절·요일 전체 선택은 연간 결과를 유지하고 세부 선�
   assert.notDeepEqual(shoulder.baseLoadProfile, winter.baseLoadProfile);
 });
 
-test("할인만 적용한 기준점과 수정된 기본요금 포함 청구액을 재현한다", () => {
+test("할인만 적용한 기준점과 기본요금 제외 전력량요금을 재현한다", () => {
   const scenarioOne = simulate({ shiftMode: "SCENARIO_1", shiftRate: 0 });
   const scenarioTwo = simulate({ shiftMode: "RES_SCENARIO_2", shiftRate: 0 });
   nearly(scenarioOne.customer.annualBenefitPerCustomerWon, 10_142.423876244207);
   nearly(scenarioTwo.customer.annualBenefitPerCustomerWon, scenarioOne.customer.annualBenefitPerCustomerWon);
-  // Correct residential tariff: 1,127,265.024 energy + 4,310 x 12 basic charge.
-  nearly(scenarioOne.customer.currentAnnualBillWon, 1_178_985.02449335);
+  nearly(scenarioOne.customer.currentAnnualBillWon, 1_127_265.02449335);
   assert.equal(scenarioOne.grid.shiftedEnergyMwh, 0);
   assert.equal(scenarioOne.utility.smpPurchaseCostChangeWon, 0);
+});
+
+test("2026년 전기자동차 저압·고압 요금표와 제주 시간대를 정확히 적용한다", () => {
+  assert.deepEqual(EV_BASIC_CHARGE_WON_PER_KW, { LOW: 2_390, HIGH: 2_580 });
+  assert.deepEqual(EV_ENERGY_RATE_TABLE.LOW.SUMMER, [84.3, 172.0, 259.2]);
+  assert.deepEqual(EV_ENERGY_RATE_TABLE.LOW.SHOULDER, [85.4, 97.2, 102.1]);
+  assert.deepEqual(EV_ENERGY_RATE_TABLE.LOW.WINTER, [107.4, 154.9, 217.5]);
+  assert.deepEqual(EV_ENERGY_RATE_TABLE.HIGH.SUMMER, [79.2, 137.4, 190.4]);
+  assert.deepEqual(EV_ENERGY_RATE_TABLE.HIGH.SHOULDER, [80.2, 91.0, 94.9]);
+  assert.deepEqual(EV_ENERGY_RATE_TABLE.HIGH.WINTER, [96.6, 127.7, 165.5]);
+
+  const weekday = getEvTariffRates("LOW", "SUMMER", "WEEKDAY");
+  assert.deepEqual(weekday.slice(0, 8), Array(8).fill(84.3));
+  assert.deepEqual(weekday.slice(8, 16), Array(8).fill(172.0));
+  assert.deepEqual(weekday.slice(16, 22), Array(6).fill(259.2));
+  assert.deepEqual(weekday.slice(22), Array(2).fill(84.3));
+
+  const saturday = getEvTariffRates("HIGH", "WINTER", "SATURDAY");
+  assert.equal(saturday[16], 127.7);
+  const holiday = getEvTariffRates("HIGH", "WINTER", "HOLIDAY");
+  assert.deepEqual(holiday, Array(24).fill(96.6));
+  const shoulderSunday = getEvTariffRates("LOW", "SHOULDER", "HOLIDAY");
+  assert.deepEqual(shoulderSunday.slice(11, 14), Array(3).fill(85.4 * 0.5));
+});
+
+test("충전방식과 공급전압 요금종별을 분리한다", () => {
+  const slowLow = simulate({ customerType: "EV_SLOW_LOW_VOLTAGE", evTariffVoltage: "LOW" });
+  const slowHigh = simulate({ customerType: "EV_SLOW_LOW_VOLTAGE", evTariffVoltage: "HIGH" });
+  const fastLow = simulate({ customerType: "EV_FAST_HIGH_VOLTAGE", evTariffVoltage: "LOW" });
+  const fastHigh = simulate({ customerType: "EV_FAST_HIGH_VOLTAGE", evTariffVoltage: "HIGH" });
+  assert.notEqual(slowLow.customer.currentAnnualBillWon, slowHigh.customer.currentAnnualBillWon);
+  assert.notEqual(fastLow.customer.currentAnnualBillWon, fastHigh.customer.currentAnnualBillWon);
+  assert.ok(slowLow.customer.currentAnnualBillWon > slowHigh.customer.currentAnnualBillWon);
+  assert.ok(fastLow.customer.currentAnnualBillWon > fastHigh.customer.currentAnnualBillWon);
+});
+
+test("임시공휴일 제외와 2026 법정공휴일 요금분류를 반영한다", () => {
+  const eventByDate = new Map(
+    Object.values(REFERENCE_DATA.events).flat().map((event) => [event.date, event]),
+  );
+  assert.equal(eventByDate.get("2025-01-27")?.dayType, "WEEKDAY");
+  assert.equal(eventByDate.get("2026-02-17")?.dayType, "HOLIDAY");
+  assert.equal(eventByDate.get("2026-02-18")?.dayType, "HOLIDAY");
+  assert.equal(eventByDate.get("2026-05-05")?.dayType, "HOLIDAY");
 });
 
 test("대상 고객 수는 줄이지 않고 수요이전율만 이전 가능한 부하에 적용한다", () => {
@@ -149,7 +201,7 @@ test("EV 2-1과 2-2는 완속·급속을 모두 계산하고 충전빈도를 구
   assert.ok(fast21.grid.shiftedEnergyMwh > 0);
   assert.ok(fast22.grid.shiftedEnergyMwh > 0);
   assert.equal(slow21.evChargingEventDays, slow21.eventDays);
-  nearly(slow22.evChargingEventDays, 19.3, 1e-9);
+  nearly(slow22.evChargingEventDays, 19.0, 1e-9);
   nearly(fast22.evChargingEventDays, slow22.evChargingEventDays, 1e-9);
   nearly(sum(slow21.baseLoadProfile), sum(slow21.shiftedLoadProfile), 1e-9);
   nearly(sum(fast21.baseLoadProfile), sum(fast21.shiftedLoadProfile), 1e-9);
