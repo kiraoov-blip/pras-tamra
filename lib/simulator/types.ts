@@ -1,6 +1,7 @@
 export type AnalysisYear = 2024 | 2025 | 2026;
 export type AnalysisSeason = "ALL" | "SHOULDER" | "SUMMER" | "WINTER";
 export type AnalysisDayType = "ALL" | "WEEKDAY" | "WEEKEND";
+export type EvTariffVoltage = "AUTO" | "LOW" | "HIGH";
 
 export type CustomerTypeCode =
   | "RESIDENTIAL_TOU"
@@ -41,6 +42,8 @@ export interface SimulationInput {
   seasonFilter: AnalysisSeason;
   dayTypeFilter: AnalysisDayType;
   customerType: CustomerTypeCode;
+  /** EV charging speed and tariff supply voltage are separate dimensions. */
+  evTariffVoltage: EvTariffVoltage;
   customerCount: number;
   discountRate: number;
   /** Share of technically movable load that actually responds (0-1). */

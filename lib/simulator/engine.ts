@@ -2,6 +2,7 @@ import type {
   AnalysisYear,
   ApplianceCode,
   CustomerTypeCode,
+  EvTariffVoltage,
   RevenueNeutralDiscountResult,
   SimulationInput,
   SimulationResult,
@@ -14,9 +15,10 @@ import {
   type ReferenceSeason,
 } from "./reference-data.generated";
 
-export const ENGINE_VERSION = "2.5.0-revenue-neutral-rate";
+export const ENGINE_VERSION = "2.6.0-ev-tariff-audit";
 
 type BaseCustomerType = Exclude<CustomerTypeCode, "EV_TOTAL">;
+type ResolvedEvTariffVoltage = Exclude<EvTariffVoltage, "AUTO">;
 type Components = Array<{ type: BaseCustomerType; weight: number }>;
 type HourlyRoute = {
   base: number[];
@@ -39,11 +41,23 @@ const EV_FAST_USAGE = 576_504.612;
 export const EV_TOTAL_SLOW_WEIGHT = EV_SLOW_USAGE / (EV_SLOW_USAGE + EV_FAST_USAGE);
 export const EV_TOTAL_FAST_WEIGHT = 1 - EV_TOTAL_SLOW_WEIGHT;
 
-const BASIC_CHARGE_MONTHLY_WON: Record<BaseCustomerType, number> = {
-  RESIDENTIAL_TOU: 4_310,
-  EV_SLOW_LOW_VOLTAGE: 2_390,
-  EV_FAST_HIGH_VOLTAGE: 2_580,
-};
+export const EV_BASIC_CHARGE_WON_PER_KW = {
+  LOW: 2_390,
+  HIGH: 2_580,
+} as const;
+
+export const EV_ENERGY_RATE_TABLE = {
+  LOW: {
+    SHOULDER: [85.4, 97.2, 102.1],
+    SUMMER: [84.3, 172.0, 259.2],
+    WINTER: [107.4, 154.9, 217.5],
+  },
+  HIGH: {
+    SHOULDER: [80.2, 91.0, 94.9],
+    SUMMER: [79.2, 137.4, 190.4],
+    WINTER: [96.6, 127.7, 165.5],
+  },
+} as const;
 
 // EV energy-only values are independently reproduced from the annual workbook.
 // Residential is corrected to the official tariff table: the detailed workbook
@@ -70,24 +84,39 @@ function repeated(value: number, count: number): number[] {
   return Array.from({ length: count }, () => value);
 }
 
-function weekdayRates(type: BaseCustomerType, season: ReferenceSeason): number[] {
+function defaultEvTariffVoltage(type: BaseCustomerType): ResolvedEvTariffVoltage {
+  return type === "EV_FAST_HIGH_VOLTAGE" ? "HIGH" : "LOW";
+}
+
+function resolveEvTariffVoltage(
+  type: BaseCustomerType,
+  requested: EvTariffVoltage,
+): ResolvedEvTariffVoltage {
+  return requested === "AUTO" ? defaultEvTariffVoltage(type) : requested;
+}
+
+function weekdayRates(
+  type: BaseCustomerType,
+  season: ReferenceSeason,
+  evTariffVoltage: EvTariffVoltage = "AUTO",
+): number[] {
   if (type === "RESIDENTIAL_TOU") {
     return season === "SHOULDER"
       ? [...repeated(125.8, 8), ...repeated(153.8, 8), ...repeated(172.4, 6), ...repeated(125.8, 2)]
       : [...repeated(138.7, 8), ...repeated(184.7, 8), ...repeated(220.5, 6), ...repeated(138.7, 2)];
   }
-  if (type === "EV_SLOW_LOW_VOLTAGE") {
-    if (season === "SHOULDER") return [...repeated(85.4, 8), ...repeated(97.2, 8), ...repeated(102.1, 6), ...repeated(85.4, 2)];
-    if (season === "SUMMER") return [...repeated(84.3, 8), ...repeated(172, 8), ...repeated(259.2, 6), ...repeated(84.3, 2)];
-    return [...repeated(107.4, 8), ...repeated(154.9, 8), ...repeated(217.5, 6), ...repeated(107.4, 2)];
-  }
-  if (season === "SHOULDER") return [...repeated(80.2, 8), ...repeated(91, 8), ...repeated(94.9, 6), ...repeated(80.2, 2)];
-  if (season === "SUMMER") return [...repeated(79.2, 8), ...repeated(137.4, 8), ...repeated(190.4, 6), ...repeated(79.2, 2)];
-  return [...repeated(96.6, 8), ...repeated(127.7, 8), ...repeated(165.5, 6), ...repeated(96.6, 2)];
+  const voltage = resolveEvTariffVoltage(type, evTariffVoltage);
+  const [low, middle, peak] = EV_ENERGY_RATE_TABLE[voltage][season];
+  return [...repeated(low, 8), ...repeated(middle, 8), ...repeated(peak, 6), ...repeated(low, 2)];
 }
 
-function tariffRates(type: BaseCustomerType, season: ReferenceSeason, dayType: ReferenceDayType): number[] {
-  const weekday = weekdayRates(type, season);
+function tariffRates(
+  type: BaseCustomerType,
+  season: ReferenceSeason,
+  dayType: ReferenceDayType,
+  evTariffVoltage: EvTariffVoltage = "AUTO",
+): number[] {
+  const weekday = weekdayRates(type, season, evTariffVoltage);
   if (type === "RESIDENTIAL_TOU" || dayType === "WEEKDAY") return weekday;
   const low = weekday[0];
   const middle = weekday[8];
@@ -98,6 +127,14 @@ function tariffRates(type: BaseCustomerType, season: ReferenceSeason, dayType: R
     for (let hour = 11; hour <= 13; hour += 1) rates[hour] *= 0.5;
   }
   return rates;
+}
+
+export function getEvTariffRates(
+  voltage: ResolvedEvTariffVoltage,
+  season: ReferenceSeason,
+  dayType: ReferenceDayType,
+): number[] {
+  return tariffRates("EV_SLOW_LOW_VOLTAGE", season, dayType, voltage);
 }
 
 function existingEvWeekendDiscount(
@@ -356,8 +393,9 @@ function discountedRates(
   event: ReferenceEvent & { hours: number[] },
   discountRate: number,
   weekendPriority: boolean,
+  evTariffVoltage: EvTariffVoltage,
 ): number[] {
-  const current = tariffRates(type, event.season, event.dayType);
+  const current = tariffRates(type, event.season, event.dayType, evTariffVoltage);
   const eventSet = new Set(event.hours);
   return current.map((rate, hour) => {
     if (!eventSet.has(hour)) return rate;
@@ -370,12 +408,77 @@ function dot(left: readonly number[], right: readonly number[]): number {
   return left.reduce((sum, value, index) => sum + value * right[index], 0);
 }
 
-function currentBill(type: BaseCustomerType, year: AnalysisYear): number {
-  if (year === 2026) {
-    return ENERGY_CHARGE_2025_WON[type] * (135 / 365) + BASIC_CHARGE_MONTHLY_WON[type] * 5;
+const PUBLIC_HOLIDAYS_2025 = new Set([
+  "2025-01-01",
+  "2025-01-28", "2025-01-29", "2025-01-30",
+  "2025-03-01", "2025-03-03",
+  "2025-05-05", "2025-05-06",
+  "2025-06-06",
+  "2025-08-15",
+  "2025-10-03", "2025-10-05", "2025-10-06", "2025-10-07", "2025-10-08", "2025-10-09",
+  "2025-12-25",
+]);
+
+function dateKey(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function seasonForMonth(month: number): ReferenceSeason {
+  if (month >= 6 && month <= 8) return "SUMMER";
+  if (month === 11 || month === 12 || month <= 2) return "WINTER";
+  return "SHOULDER";
+}
+
+function dayTypeFor2025(date: Date): ReferenceDayType {
+  if (PUBLIC_HOLIDAYS_2025.has(dateKey(date))) return "HOLIDAY";
+  if (date.getUTCDay() === 6) return "SATURDAY";
+  if (date.getUTCDay() === 0) return "HOLIDAY";
+  return "WEEKDAY";
+}
+
+function annualTariffIndex2025(
+  type: Exclude<BaseCustomerType, "RESIDENTIAL_TOU">,
+  voltage: ResolvedEvTariffVoltage,
+): number {
+  let total = 0;
+  for (
+    let time = Date.UTC(2025, 0, 1);
+    time <= Date.UTC(2025, 11, 31);
+    time += 24 * 60 * 60 * 1_000
+  ) {
+    const date = new Date(time);
+    const season = seasonForMonth(date.getUTCMonth() + 1);
+    total += dot(LOAD_PROFILES[type][season], tariffRates(type, season, dayTypeFor2025(date), voltage));
   }
+  return total;
+}
+
+const EV_TARIFF_INDEX_2025 = {
+  EV_SLOW_LOW_VOLTAGE: {
+    LOW: annualTariffIndex2025("EV_SLOW_LOW_VOLTAGE", "LOW"),
+    HIGH: annualTariffIndex2025("EV_SLOW_LOW_VOLTAGE", "HIGH"),
+  },
+  EV_FAST_HIGH_VOLTAGE: {
+    LOW: annualTariffIndex2025("EV_FAST_HIGH_VOLTAGE", "LOW"),
+    HIGH: annualTariffIndex2025("EV_FAST_HIGH_VOLTAGE", "HIGH"),
+  },
+} as const;
+
+function currentEnergyBill(
+  type: BaseCustomerType,
+  year: AnalysisYear,
+  evTariffVoltage: EvTariffVoltage,
+): number {
+  let energyCharge = ENERGY_CHARGE_2025_WON[type];
+  if (type !== "RESIDENTIAL_TOU") {
+    const defaultVoltage = defaultEvTariffVoltage(type);
+    const selectedVoltage = resolveEvTariffVoltage(type, evTariffVoltage);
+    energyCharge *= EV_TARIFF_INDEX_2025[type][selectedVoltage]
+      / EV_TARIFF_INDEX_2025[type][defaultVoltage];
+  }
+  if (year === 2026) return energyCharge * (135 / 365);
   const dayScale = year === 2024 ? 366 / 365 : 1;
-  return ENERGY_CHARGE_2025_WON[type] * dayScale + BASIC_CHARGE_MONTHLY_WON[type] * 12;
+  return energyCharge * dayScale;
 }
 
 export function validateSimulationInput(input: SimulationInput): string[] {
@@ -422,12 +525,18 @@ export function runSimulation(input: SimulationInput): SimulationResult {
   const chartShifted = Array.from({ length: 24 }, () => 0);
 
   components.forEach(({ type, weight }) => {
-    annualCurrentBill += currentBill(type, input.analysisYear) * weight;
+    annualCurrentBill += currentEnergyBill(type, input.analysisYear, input.evTariffVoltage) * weight;
     events.forEach((event) => {
       const route = routeForEvent(type, input, event, selectedCodes);
       const occurrenceWeight = route.occurrenceWeight ?? 1;
-      const currentRates = tariffRates(type, event.season, event.dayType);
-      const newRates = discountedRates(type, event, input.discountRate, input.weekendDiscountPriority);
+      const currentRates = tariffRates(type, event.season, event.dayType, input.evTariffVoltage);
+      const newRates = discountedRates(
+        type,
+        event,
+        input.discountRate,
+        input.weekendDiscountPriority,
+        input.evTariffVoltage,
+      );
       benefitPerCustomer += (dot(route.base, currentRates) - dot(route.shifted, newRates))
         * occurrenceWeight * weight;
       movedKwhPerCustomer += route.movedKwh * occurrenceWeight * weight;
@@ -476,6 +585,9 @@ export function runSimulation(input: SimulationInput): SimulationResult {
   }
   if (input.customerType !== "RESIDENTIAL_TOU") {
     warnings.push("EV는 계약전력 50kW 미만을 완속, 50kW 이상을 급속으로 구분합니다.");
+    warnings.push(input.evTariffVoltage === "AUTO"
+      ? "공급전압 자동값은 완속 저압·급속 고압이며, 충전방식과 별도로 저압·고압 요금종별을 선택할 수 있습니다."
+      : `충전방식과 별개로 ${input.evTariffVoltage === "LOW" ? "저압" : "고압"} 전기자동차 충전전력요금을 적용했습니다.`);
   }
   if (input.customerType === "EV_TOTAL") {
     warnings.push("전기차 전체는 2025년 사용량 기준 완속 77.2%·급속 22.8%를 가중 합산합니다.");
@@ -493,8 +605,9 @@ export function runSimulation(input: SimulationInput): SimulationResult {
     warnings.push("선택한 연도·계절·요일·발령조건에 해당하는 발령실적이 없어 할인 및 부하이전 효과는 0으로 계산했습니다.");
   }
   if (input.analysisYear === 2026) {
-    warnings.push("2026년은 5월 15일까지의 YTD 발령자료와 5개월 기본요금을 적용했습니다.");
+    warnings.push("2026년은 5월 15일까지의 YTD 발령자료와 135일 전력량요금을 적용했습니다.");
   }
+  warnings.push("고객요금과 판매수입은 기존 PRAS-EV 기준에 따라 기본요금·부가가치세·전력산업기반기금 등을 제외한 전력량요금 기준입니다.");
   warnings.push("할인은 대상 고객 전체의 발령시간대 사용량에 적용하며, 수요이전율은 이전 가능한 부하 중 실제로 발령시간대로 이동하는 비율입니다.");
   warnings.push("출력제어 회피 가능량은 발령시간 부하 증가량의 85%가 실제 출력제어를 대체한다는 가정값입니다.");
 

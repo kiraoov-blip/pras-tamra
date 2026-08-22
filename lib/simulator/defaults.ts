@@ -20,6 +20,7 @@ export const DEFAULT_SIMULATION_INPUT: SimulationInput = {
   seasonFilter: "ALL",
   dayTypeFilter: "ALL",
   customerType: "RESIDENTIAL_TOU",
+  evTariffVoltage: "AUTO",
   customerCount: DEFAULT_CUSTOMER_COUNTS.RESIDENTIAL_TOU,
   discountRate: 0.5,
   shiftRate: 0.5,
